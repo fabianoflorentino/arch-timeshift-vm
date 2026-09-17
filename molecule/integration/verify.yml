@@ -6,6 +6,7 @@
 
   vars:
     project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    tier2_sandbox: /tmp/arch-timeshift-vm-tier2
 
   tasks:
     - name: Stat expected project paths
@@ -34,3 +35,15 @@
       loop: "{{ project_paths.results }}"
       loop_control:
         label: "{{ item.item }}"
+
+    - name: Stat the Tier 2 sandbox path
+      ansible.builtin.stat:
+        path: "{{ tier2_sandbox }}"
+      register: tier2_sandbox_stat
+
+    - name: Assert the synthetic BTRFS sandbox left no residue
+      ansible.builtin.assert:
+        that:
+          - not tier2_sandbox_stat.stat.exists
+        fail_msg: "Tier 2 left sandbox residue at {{ tier2_sandbox }}"
+        quiet: true

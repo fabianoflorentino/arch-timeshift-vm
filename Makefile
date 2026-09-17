@@ -55,8 +55,11 @@ test: lint test-image ## Molecule Tier 1 (unprivileged, Docker)
 > $(BIN)/molecule test -s default
 
 .PHONY: test-integration
-test-integration: lint ## Molecule Tier 2 (privileged sandbox, requires root)
-> $(BIN)/molecule test -s integration
+test-integration: lint ## Molecule Tier 2 (privileged BTRFS checks; prompts for sudo)
+> sudo -E env "PATH=$(CURDIR)/$(BIN):$$PATH" \
+>   "ANSIBLE_PYTHON_INTERPRETER=$(CURDIR)/$(BIN)/python" \
+>   "DOCKER_CONFIG=$(DOCKER_CONFIG)" "DOCKER_HOST=$(DOCKER_HOST)" \
+>   $(BIN)/molecule test -s integration
 
 .PHONY: clean
 clean: ## Remove caches, docker config and molecule scratch

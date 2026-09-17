@@ -60,7 +60,7 @@ Uma fase só avança quando:
 
 ### Fase 0 - Fundação, governança e harness
 
-Status: em andamento.
+Status: concluído (commit `d4533f8`).
 
 - `git`, `.gitignore`, `.editorconfig`, `.yamllint`, `.ansible-lint`,
   `.pre-commit-config.yaml`.
@@ -69,22 +69,24 @@ Status: em andamento.
 - Cenários Molecule Tier 1 e Tier 2 base.
 - `docs/PLAN.md`, `docs/ARCHITECTURE.md`, `README.md`.
 
-Gate: `make lint` limpo no escopo e `molecule test -s default` verde.
+Gate: `make lint` limpo no escopo e `molecule test -s default` verde. ✅
 
 ### Fase 1 - Preflight (role `snapshot`)
 
-Status: pendente.
+Status: implementado. Tier 1 verde (positivos, negativos e idempotência);
+Tier 2 aguardando execução com root (`make test-integration`).
 
-- Detectar o topo do BTRFS e o diretório real de snapshots via `findmnt` /
-  `btrfs subvolume`, sem hardcode.
-- Validar `confirm_restore`, `vm_name`, `vm_disk` sob `vm_images_dir`, espaço
-  livre.
-- Checagem completa de comandos do host.
-- Validar snapshot (`@`/`@home` subvolumes, `@` read-only, `info.json`) e
-  resolver `latest`.
-- Role fica lint-clean.
+- Detecção automática do topo do BTRFS e do diretório real de snapshots via
+  `findmnt`, sem hardcode (`timeshift_root: auto`).
+- Validação de `confirm_restore`, `vm_name`, `vm_disk` canonicalizado sob
+  `vm_images_dir`, espaço livre com margem percentual.
+- Checagem de comandos do host com uma única mensagem listando os ausentes.
+- Validação do snapshot (`@`/`@home` subvolumes, `@` read-only via
+  `btrfs property`, `info.json`) e resolução de `latest`.
+- Role lint-clean (`roles/snapshot` fora de `exclude_paths`).
 
-Gate: positivos/negativos/idempotência no Tier 1 (+ Tier 2 de detecção).
+Gate: positivos/negativos/idempotência no Tier 1 ✅ (+ Tier 2 de detecção
+com BTRFS sintético em loopback, pendente de execução).
 
 ### Fase 2 - Disco atômico e sem resíduo (role `disk`)
 
@@ -142,8 +144,11 @@ Gate: `make e2e` verde.
 
 ## Bloqueadores descobertos no host de referência
 
-1. `timeshift_root` aponta para `/timeshift-btrfs/snapshots`, que não existe.
-   O caminho real é `/mnt/btrfs-top/timeshift-btrfs/snapshots`. (Fase 1)
+1. ~~`timeshift_root` aponta para `/timeshift-btrfs/snapshots`, que não
+   existe.~~ Resolvido na Fase 1: `timeshift_root: auto` detecta o topo do
+   BTRFS (`/mnt/btrfs-top`) via `findmnt`.
 2. Kernel/initramfs ficam no ESP vfat separado, fora do snapshot BTRFS.
    O `@/boot` está vazio. (Fase 4)
-3. `sgdisk`, `mkfs.fat` e `arch-chroot` não estão instalados no host. (Fase 1)
+3. `sgdisk`, `mkfs.fat` e `arch-chroot` não estão instalados no host. A Fase 1
+   já reporta os ausentes de forma clara; o Tier 2 usa um subconjunto válido
+   até a instalação (necessária nas Fases 2 e 4).

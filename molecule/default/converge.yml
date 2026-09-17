@@ -1,8 +1,26 @@
 ---
-- name: Converge - Tier 1 harness sanity
+- name: Converge - Tier 1 snapshot preflight
   hosts: all
   become: false
   gather_facts: true
+
+  vars:
+    fixture_root: /tmp/arch-timeshift-vm-fixtures
+    fixture_snapshots: "{{ fixture_root }}/snapshots"
+    fixture_images: "{{ fixture_root }}/images"
+    fixture_snapshot: "2020-01-02_03-04-05"
+    fixture_snapshot_dir: "{{ fixture_snapshots }}/{{ fixture_snapshot }}"
+
+    # Base variables for the role under test. Individual negative cases below
+    # override a single value to prove a guard fires.
+    confirm_restore: true
+    vm_name: tier1-test
+    timeshift_root: "{{ fixture_snapshots }}"
+    snapshot: latest
+    vm_images_dir: "{{ fixture_images }}"
+    vm_disk: "{{ fixture_images }}/vm.qcow2"
+    vm_disk_size: 10M
+    snapshot_required_commands: []
 
   tasks:
     - name: Assert the managed node is Arch Linux
@@ -24,3 +42,116 @@
         content: "tier1-ok\n"
         dest: /etc/arch-timeshift-vm/tier1-ok
         mode: "0644"
+
+    - name: Create the fixture tree
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ fixture_root }}"
+        - "{{ fixture_snapshots }}"
+        - "{{ fixture_images }}"
+        - "{{ fixture_snapshot_dir }}"
+        - "{{ fixture_snapshot_dir }}/@"
+        - "{{ fixture_snapshot_dir }}/@home"
+
+    - name: Write the fixture snapshot metadata
+      ansible.builtin.copy:
+        content: |
+          {
+            "type": "btrfs",
+            "subvolumes": {"@": [], "@home": []}
+          }
+        dest: "{{ fixture_snapshot_dir }}/info.json"
+        mode: "0644"
+
+    - name: Positive - the snapshot role resolves and validates the fixture
+      block:
+        - name: Run the snapshot role
+          ansible.builtin.include_role:
+            name: snapshot
+
+        - name: Assert the resolved preflight contract
+          ansible.builtin.assert:
+            that:
+              - resolved_snapshot == fixture_snapshot
+              - snapshot_root == fixture_snapshot_dir + '/@'
+              - snapshot_home == fixture_snapshot_dir + '/@home'
+              - vm_images_dir_real == fixture_images
+              - vm_disk_real == fixture_images + '/vm.qcow2'
+            fail_msg: "Snapshot role resolved an unexpected preflight contract"
+
+    - name: Negative - confirm_restore=false must abort
+      block:
+        - name: Run the snapshot role without confirmation
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            confirm_restore: false
+
+        - name: Record a failed confirmation guard
+          ansible.builtin.set_fact:
+            tier1_confirm_guard: false
+      rescue:
+        - name: Record a successful confirmation guard
+          ansible.builtin.set_fact:
+            tier1_confirm_guard: true
+
+    - name: Negative - vm_disk outside vm_images_dir must abort
+      block:
+        - name: Run the snapshot role with a rogue disk path
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            vm_disk: /tmp/rogue.qcow2
+
+        - name: Record a failed disk guard
+          ansible.builtin.set_fact:
+            tier1_disk_guard: false
+      rescue:
+        - name: Record a successful disk guard
+          ansible.builtin.set_fact:
+            tier1_disk_guard: true
+
+    - name: Negative - an unknown snapshot must abort
+      block:
+        - name: Run the snapshot role with an unknown snapshot
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            snapshot: 1999-01-01_00-00-00
+
+        - name: Record a failed snapshot guard
+          ansible.builtin.set_fact:
+            tier1_snapshot_guard: false
+      rescue:
+        - name: Record a successful snapshot guard
+          ansible.builtin.set_fact:
+            tier1_snapshot_guard: true
+
+    - name: Negative - insufficient free space must abort
+      block:
+        - name: Run the snapshot role requesting an impossible disk
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            vm_disk_size: 100T
+
+        - name: Record a failed space guard
+          ansible.builtin.set_fact:
+            tier1_space_guard: false
+      rescue:
+        - name: Record a successful space guard
+          ansible.builtin.set_fact:
+            tier1_space_guard: true
+
+    - name: Assert every negative guard fired
+      ansible.builtin.assert:
+        that:
+          - tier1_confirm_guard | default(false)
+          - tier1_disk_guard | default(false)
+          - tier1_snapshot_guard | default(false)
+          - tier1_space_guard | default(false)
+        fail_msg: "One or more preflight guards did not fire as expected"
+        success_msg: "All snapshot preflight guards fired correctly"

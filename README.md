@@ -38,6 +38,7 @@ make deps    # instala as collections do requirements.yml
 make lint    # yamllint + ansible-lint
 make syntax  # syntax-check dos playbooks
 make test    # Molecule Tier 1 (Docker, sem privilégio)
+make test-integration   # Molecule Tier 2 (BTRFS sintético; pede sudo)
 ```
 
 ## Uso
@@ -67,8 +68,9 @@ sudo ansible-playbook playbooks/restore.yml \
 
 - `make test` - Molecule Tier 1: lógica, templates e contratos de variáveis
   em container Docker.
-- `make test-integration` - Molecule Tier 2: NBD/BTRFS/mkfs/virsh reais em
-  sandbox local; **requer root**.
+- `make test-integration` - Molecule Tier 2: detecção BTRFS e validação de
+  snapshot em sandbox com BTRFS sintético (loopback); **requer root** (o
+  alvo chama `sudo -E`).
 - `make e2e` - Tier 3 (na Fase 6): boot real da VM com KVM aninhado.
 
 Nenhum teste toca snapshots reais nem imagens reais. Veja
@@ -77,7 +79,10 @@ Nenhum teste toca snapshots reais nem imagens reais. Veja
 ## Segurança
 
 - `confirm_restore: false` por padrão.
-- `vm_disk` é validado contra `vm_images_dir` antes de qualquer remoção.
+- `timeshift_root: auto` detecta o subvolume topo do BTRFS e o diretório real
+  de snapshots; dispensa caminhos fixos.
+- `vm_disk` é canonicalizado e validado contra `vm_images_dir` antes de
+  qualquer remoção, com checagem de espaço livre.
 - O `/etc/fstab` do host nunca é modificado (mounts efêmeros).
 - Cleanup automático em caso de falha.
 

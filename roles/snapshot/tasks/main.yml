@@ -1,64 +1,296 @@
 ---
+# Preflight: resolve and validate the snapshot and the destructive VM disk
+# path. Every task in this role is read-only; no host state is mutated here.
+
 - name: Require explicit confirmation
   ansible.builtin.assert:
     that:
-      - confirm_restore | bool
+      - confirm_restore | default(false) | bool
     fail_msg: >-
-      This playbook creates/overwrites a VM disk. Run with
-      -e confirm_restore=true after reviewing the variables.
+      Refusing to run: this pipeline creates and overwrites a VM disk. Re-run
+      with -e confirm_restore=true only after reviewing group_vars/all.yml.
+    quiet: true
 
-- name: Check required commands
-  ansible.builtin.command: "bash -lc 'command -v {{ item }}'"
-  loop:
-    - btrfs
-    - qemu-img
-    - qemu-nbd
-    - sgdisk
-    - mkfs.fat
-    - virsh
-    - grub-install
+- name: Validate vm_name
+  ansible.builtin.assert:
+    that:
+      - vm_name is defined
+      - vm_name | length > 0
+      - vm_name is match('^[A-Za-z0-9._-]+$')
+    fail_msg: "vm_name must be a non-empty name matching ^[A-Za-z0-9._-]+$"
+    quiet: true
+
+- name: Ensure required host commands are available
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - "command -v {{ item }}"
+  loop: "{{ snapshot_required_commands }}"
+  register: snapshot_command_check
   changed_when: false
+  failed_when: false
 
-- name: Find latest Timeshift snapshot
-  ansible.builtin.shell: |
-    set -euo pipefail
-    find "{{ timeshift_root }}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
-      sort -V | tail -n1
-  args:
-    executable: /bin/bash
-  register: latest_snapshot
-  changed_when: false
-  when: snapshot == "latest"
+- name: Fail with a single clear message when commands are missing
+  ansible.builtin.assert:
+    that:
+      - (snapshot_command_check.results | default([]) | rejectattr('rc', 'eq', 0) | length) == 0
+    fail_msg: >-
+      Missing required host commands:
+      {{ snapshot_command_check.results | default([]) | rejectattr('rc', 'eq', 0)
+         | map(attribute='item') | join(', ') }}. Install them before running
+      the restore.
+    quiet: true
 
-- name: Resolve snapshot name
+- name: Resolve the Timeshift snapshot root directory
+  when: timeshift_root | default('auto') == 'auto'
+  block:
+    - name: Find the root filesystem source
+      ansible.builtin.command:
+        cmd: findmnt --noheadings --output SOURCE --target /
+      register: snapshot_root_source
+      changed_when: false
+
+    - name: Determine the device that holds the snapshots
+      ansible.builtin.set_fact:
+        snapshot_device: >-
+          {{ timeshift_device
+             if (timeshift_device | default('') | length) > 0
+             else (snapshot_root_source.stdout | trim | regex_replace('\\[.*\\]$', '')) }}
+
+    - name: List BTRFS mounts for the snapshot device
+      ansible.builtin.command:
+        cmd: >-
+          findmnt --raw --noheadings --output TARGET,FSROOT
+          --source {{ snapshot_device }} --types btrfs
+      register: snapshot_btrfs_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Select the BTRFS top-level mount (fsroot "/")
+      ansible.builtin.set_fact:
+        snapshot_top_mount: >-
+          {{ snapshot_btrfs_mounts.stdout_lines | default([])
+             | select('match', '^\\S+\\s+/$')
+             | map('regex_replace', '\\s+/$', '')
+             | list | first | default('') }}
+
+    - name: Fail when the BTRFS top-level subvolume is not mounted
+      ansible.builtin.assert:
+        that:
+          - snapshot_top_mount | length > 0
+        fail_msg: >-
+          Could not find a mounted BTRFS top-level (subvolid=5) subvolume for
+          {{ snapshot_device }}. Mount it (for example
+          `mount -o subvolid=5 {{ snapshot_device }} /mnt/btrfs-top`) or set
+          timeshift_root explicitly.
+        quiet: true
+
+    - name: Derive the Timeshift snapshot root from the top-level mount
+      ansible.builtin.set_fact:
+        snapshot_root_dir: "{{ snapshot_top_mount }}/timeshift-btrfs/snapshots"
+
+- name: Use the explicitly configured Timeshift root directory
   ansible.builtin.set_fact:
-    resolved_snapshot: "{{ latest_snapshot.stdout | trim if snapshot == 'latest' else snapshot }}"
+    snapshot_root_dir: "{{ timeshift_root }}"
+  when: timeshift_root | default('auto') != 'auto'
+
+- name: Stat the Timeshift root directory
+  ansible.builtin.stat:
+    path: "{{ snapshot_root_dir }}"
+  register: snapshot_root_stat
+
+- name: Assert the Timeshift root directory exists
+  ansible.builtin.assert:
+    that:
+      - snapshot_root_stat.stat.exists
+      - snapshot_root_stat.stat.isdir
+    fail_msg: >-
+      Timeshift snapshot root '{{ snapshot_root_dir }}' does not exist. Mount
+      the BTRFS top-level or set timeshift_root explicitly.
+    quiet: true
+
+- name: List available snapshots
+  ansible.builtin.find:
+    paths: "{{ snapshot_root_dir }}"
+    recurse: false
+    file_type: directory
+  register: snapshot_dirs
+
+- name: Assert at least one snapshot is available
+  ansible.builtin.assert:
+    that:
+      - snapshot_dirs.matched | int > 0
+    fail_msg: "No Timeshift snapshots found under {{ snapshot_root_dir }}"
+    quiet: true
+
+- name: Resolve the snapshot name to restore
+  ansible.builtin.set_fact:
+    resolved_snapshot: >-
+      {{ (snapshot_dirs.files | map(attribute='path') | map('basename')
+          | sort | last)
+         if (snapshot | default('latest')) == 'latest' else snapshot }}
+
+- name: Assert the requested snapshot exists
+  ansible.builtin.assert:
+    that:
+      - resolved_snapshot in (snapshot_dirs.files | map(attribute='path') | map('basename') | list)
+    fail_msg: >-
+      Snapshot '{{ resolved_snapshot }}' was not found under
+      {{ snapshot_root_dir }}.
+    quiet: true
 
 - name: Set snapshot paths
   ansible.builtin.set_fact:
-    snapshot_dir: "{{ timeshift_root }}/{{ resolved_snapshot }}"
-    snapshot_root: "{{ timeshift_root }}/{{ resolved_snapshot }}/@"
-    snapshot_home: "{{ timeshift_root }}/{{ resolved_snapshot }}/@home"
+    snapshot_dir: "{{ snapshot_root_dir }}/{{ resolved_snapshot }}"
+    snapshot_root: "{{ snapshot_root_dir }}/{{ resolved_snapshot }}/@"
+    snapshot_home: "{{ snapshot_root_dir }}/{{ resolved_snapshot }}/@home"
+    snapshot_info_file: "{{ snapshot_root_dir }}/{{ resolved_snapshot }}/info.json"
 
-- name: Verify snapshot structure
+- name: Stat the snapshot subvolumes and metadata
   ansible.builtin.stat:
     path: "{{ item }}"
   loop:
     - "{{ snapshot_root }}"
     - "{{ snapshot_home }}"
-  register: snapshot_stats
+    - "{{ snapshot_info_file }}"
+  register: snapshot_paths
 
-- name: Assert snapshot exists
+- name: Assert the snapshot subvolumes and metadata exist
   ansible.builtin.assert:
     that:
       - item.stat.exists
-      - item.stat.isdir
-    fail_msg: "Missing expected snapshot path: {{ item.item }}"
-  loop: "{{ snapshot_stats.results }}"
+      - item.stat.isdir if item.item != snapshot_info_file else item.stat.isreg
+    fail_msg: "Missing or wrong type in the snapshot: {{ item.item }}"
+    quiet: true
+  loop: "{{ snapshot_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
-- name: Show selected snapshot
+- name: Read the snapshot metadata (info.json)
+  ansible.builtin.slurp:
+    src: "{{ snapshot_info_file }}"
+  register: snapshot_info_raw
+
+- name: Parse the snapshot metadata
+  ansible.builtin.set_fact:
+    snapshot_info: "{{ snapshot_info_raw.content | b64decode | from_json }}"
+
+- name: Assert the snapshot metadata describes @ and @home BTRFS subvolumes
+  ansible.builtin.assert:
+    that:
+      - snapshot_info['type'] | default('') == 'btrfs'
+      - "'@' in (snapshot_info['subvolumes'] | default({}))"
+      - "'@home' in (snapshot_info['subvolumes'] | default({}))"
+    fail_msg: >-
+      Snapshot {{ resolved_snapshot }} has an invalid info.json: expected a
+      BTRFS snapshot listing the @ and @home subvolumes.
+    quiet: true
+
+- name: Detect the filesystem type of the snapshot root
+  ansible.builtin.command:
+    cmd: "stat --file-system --format=%T {{ snapshot_root_dir }}"
+  register: snapshot_fs_type
+  changed_when: false
+
+- name: Validate the BTRFS snapshot subvolumes and read-only state
+  when: snapshot_fs_type.stdout | trim == 'btrfs'
+  block:
+    - name: Inspect the snapshot @ subvolume
+      ansible.builtin.command:
+        cmd: "btrfs subvolume show {{ snapshot_root }}"
+      register: snapshot_root_check
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect the snapshot @home subvolume
+      ansible.builtin.command:
+        cmd: "btrfs subvolume show {{ snapshot_home }}"
+      register: snapshot_home_check
+      changed_when: false
+      failed_when: false
+
+    - name: Read the read-only property of the snapshot @ subvolume
+      ansible.builtin.command:
+        cmd: "btrfs property get --type subvolume {{ snapshot_root }} ro"
+      register: snapshot_root_ro
+      changed_when: false
+      failed_when: false
+
+    - name: Assert @ and @home are subvolumes and @ is read-only
+      ansible.builtin.assert:
+        that:
+          - snapshot_root_check.rc == 0
+          - snapshot_home_check.rc == 0
+          - "'ro=true' in (snapshot_root_ro.stdout | default('') | replace(' ', ''))"
+        fail_msg: >-
+          Snapshot {{ resolved_snapshot }} is not a valid Timeshift BTRFS
+          snapshot: @ and @home must be subvolumes and @ must be read-only.
+        quiet: true
+
+- name: Canonicalize the VM images directory
+  ansible.builtin.command:
+    cmd: "realpath --canonicalize-missing {{ vm_images_dir }}"
+  register: vm_images_dir_real_cmd
+  changed_when: false
+
+- name: Canonicalize the VM disk path
+  ansible.builtin.command:
+    cmd: "realpath --canonicalize-missing {{ vm_disk }}"
+  register: vm_disk_real_cmd
+  changed_when: false
+
+- name: Record the canonical destructive paths
+  ansible.builtin.set_fact:
+    vm_images_dir_real: "{{ vm_images_dir_real_cmd.stdout | trim }}"
+    vm_disk_real: "{{ vm_disk_real_cmd.stdout | trim }}"
+
+- name: Stat the VM images directory
+  ansible.builtin.stat:
+    path: "{{ vm_images_dir_real }}"
+  register: vm_images_dir_stat
+
+- name: Assert the VM disk lives inside the allowed images directory
+  ansible.builtin.assert:
+    that:
+      - vm_images_dir_stat.stat.exists
+      - vm_images_dir_stat.stat.isdir
+      - vm_disk_real.startswith(vm_images_dir_real + '/')
+      - vm_disk_real != vm_images_dir_real
+    fail_msg: >-
+      vm_disk '{{ vm_disk_real }}' must be a file strictly inside vm_images_dir
+      '{{ vm_images_dir_real }}'.
+    quiet: true
+
+- name: Query free space on the VM disk filesystem
+  ansible.builtin.command:
+    cmd: "findmnt --noheadings --bytes --output AVAIL --target {{ vm_images_dir_real }}"
+  register: vm_disk_avail_cmd
+  changed_when: false
+
+- name: Compute the required free space
+  ansible.builtin.set_fact:
+    vm_disk_required_bytes: >-
+      {{ ((vm_disk_size | human_to_bytes) *
+          (1 + (disk_space_headroom_percent | int) / 100)) | int }}
+
+- name: Assert there is enough free space for the VM disk
+  ansible.builtin.assert:
+    that:
+      - vm_disk_avail_cmd.stdout | trim | length > 0
+      - (vm_disk_avail_cmd.stdout | trim | int) >= (vm_disk_required_bytes | int)
+    fail_msg: >-
+      Not enough free space on the filesystem holding {{ vm_images_dir_real }}:
+      need {{ vm_disk_required_bytes }} bytes, have
+      {{ vm_disk_avail_cmd.stdout | trim or 'unknown' }}.
+    quiet: true
+
+- name: Report the resolved preflight
   ansible.builtin.debug:
     msg:
-      - "Snapshot: {{ resolved_snapshot }}"
-      - "Root: {{ snapshot_root }}"
-      - "Home: {{ snapshot_home }}"
+      - "Snapshot root : {{ snapshot_root_dir }}"
+      - "Snapshot      : {{ resolved_snapshot }}"
+      - "Root subvolume: {{ snapshot_root }}"
+      - "Home subvolume: {{ snapshot_home }}"
+      - "VM disk       : {{ vm_disk_real }}"
+      - "Free space    : {{ vm_disk_avail_cmd.stdout | trim }} bytes"

@@ -13,4 +13,15 @@ exclude_paths:
   - .docker/
   - .venv/
   - molecule/*/.molecule/
-  - roles/
+  # Remaining legacy roles, rewritten phase by phase (docs/PLAN.md).
+  - roles/boot/
+  - roles/disk/
+  - roles/libvirt/
+  - roles/restore/
+
+skip_list:
+  # The snapshot role intentionally consumes the project-wide configuration
+  # (confirm_restore, vm_*, timeshift_root) so destructive-path validation can
+  # be audited in one place, and emits resolved_snapshot for the rest of the
+  # pipeline. Prefixing those would hide the real interface.
+  - var-naming[no-role-prefix]

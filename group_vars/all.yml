@@ -7,11 +7,15 @@ vm_memory_mib: 4096
 vm_vcpus: 4
 vm_machine: pc-q35-11.1
 
-vm_disk: /data/libvirt/images/{{ vm_name }}.qcow2
+# Base directory that owns every VM disk. Destructive paths must live below it.
+vm_images_dir: /data/libvirt/images
+vm_disk: "{{ vm_images_dir }}/{{ vm_name }}.qcow2"
 vm_disk_size: 120G
 
 # Host paths
-timeshift_root: /timeshift-btrfs/snapshots
+# "auto" detects the real Timeshift snapshot directory (BTRFS top-level) at
+# runtime; set an explicit path only for unusual layouts.
+timeshift_root: auto
 work_dir: /data/timeshift-vm-work
 nvram_dir: /var/lib/libvirt/qemu/nvram
 

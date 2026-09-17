@@ -1,1 +1,30 @@
 ---
+# Base directory that owns every VM disk. Destructive paths must live below it.
+vm_images_dir: /data/libvirt/images
+
+# Timeshift snapshot root. "auto" detects the BTRFS top-level subvolume and
+# derives <top>/timeshift-btrfs/snapshots at runtime.
+timeshift_root: auto
+
+# Optional device override for auto-detection. Empty means "derive from /".
+# Mainly a test seam for synthetic BTRFS sandboxes.
+timeshift_device: ""
+
+# Commands required by the full restore pipeline. Fail early with a single
+# clear message when any is missing.
+snapshot_required_commands:
+  - btrfs
+  - findmnt
+  - realpath
+  - qemu-img
+  - qemu-nbd
+  - sgdisk
+  - mkfs.fat
+  - virsh
+  - virt-xml-validate
+  - grub-install
+  - efibootmgr
+  - arch-chroot
+
+# Extra free-space headroom (percent) required on the VM disk filesystem.
+disk_space_headroom_percent: 10

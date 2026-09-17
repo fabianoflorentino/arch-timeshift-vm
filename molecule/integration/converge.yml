@@ -1,11 +1,41 @@
 ---
-- name: Converge - Tier 2 host contract (read-only)
+- name: Converge - Tier 2 synthetic BTRFS snapshot detection (read-only role)
   hosts: all
   become: false
   gather_facts: false
 
   vars:
     project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+
+    tier2_sandbox: /tmp/arch-timeshift-vm-tier2
+    tier2_image: "{{ tier2_sandbox }}/btrfs.img"
+    tier2_mount: "{{ tier2_sandbox }}/top"
+    tier2_snapshots: "{{ tier2_mount }}/timeshift-btrfs/snapshots"
+    tier2_snapshot_name: "2020-01-02_03-04-05"
+    tier2_snapshot_dir: "{{ tier2_snapshots }}/{{ tier2_snapshot_name }}"
+    tier2_images: "{{ tier2_sandbox }}/images"
+
+    # Inputs consumed by the snapshot role, pointed at the sandbox.
+    confirm_restore: true
+    vm_name: tier2-test
+    timeshift_root: auto
+    snapshot: latest
+    vm_images_dir: "{{ tier2_images }}"
+    vm_disk: "{{ tier2_images }}/vm.qcow2"
+    vm_disk_size: 64M
+
+    # sgdisk/mkfs.fat and arch-chroot are exercised in later phases once the
+    # required packages are installed on the host.
+    snapshot_required_commands:
+      - btrfs
+      - findmnt
+      - realpath
+      - qemu-img
+      - qemu-nbd
+      - virsh
+      - virt-xml-validate
+      - grub-install
+      - efibootmgr
 
   tasks:
     - name: Load project variables
@@ -29,3 +59,121 @@
           - project.timeshift_root is defined
           - project.work_dir is defined
         fail_msg: "group_vars/all.yml is missing required variables"
+
+    - name: Check the effective user id
+      ansible.builtin.command: id -u
+      register: tier2_uid
+      changed_when: false
+
+    - name: Assert the scenario runs as root
+      ansible.builtin.assert:
+        that:
+          - tier2_uid.stdout | trim == '0'
+        fail_msg: >-
+          Tier 2 needs root (BTRFS subvolume and loop mount). Run it with:
+          sudo -E make test-integration
+        quiet: true
+
+    - name: Exercise detection and validation on a synthetic snapshot
+      when: tier2_uid.stdout | trim == '0'
+      block:
+        - name: Create the sandbox directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ tier2_sandbox }}"
+            - "{{ tier2_mount }}"
+            - "{{ tier2_images }}"
+          changed_when: false
+
+        - name: Create the BTRFS backing image
+          ansible.builtin.command:
+            cmd: "truncate --size 512M {{ tier2_image }}"
+          changed_when: false
+
+        - name: Format the backing image as BTRFS
+          ansible.builtin.command:
+            cmd: "mkfs.btrfs --quiet --force {{ tier2_image }}"
+          changed_when: false
+
+        # The mount module would manage /etc/fstab; use mount(8) directly so
+        # the host fstab is provably untouched.
+        - name: Mount the synthetic BTRFS top-level without touching fstab  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            cmd: "mount --types btrfs --options loop {{ tier2_image }} {{ tier2_mount }}"
+          changed_when: false
+
+        - name: Find the loop device backing the synthetic filesystem
+          ansible.builtin.command:
+            cmd: "findmnt --noheadings --output SOURCE --target {{ tier2_mount }}"
+          register: tier2_loop
+          changed_when: false
+
+        - name: Create the synthetic Timeshift snapshot layout
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ tier2_snapshots }}"
+            - "{{ tier2_snapshot_dir }}"
+          changed_when: false
+
+        - name: Create the @ and @home subvolumes
+          ansible.builtin.command:
+            cmd: "btrfs subvolume create {{ tier2_snapshot_dir }}/{{ item }}"
+          loop:
+            - "@"
+            - "@home"
+          changed_when: false
+
+        - name: Mark the @ subvolume read-only
+          ansible.builtin.command:
+            cmd: "btrfs property set --type subvolume {{ tier2_snapshot_dir }}/@ ro true"
+          changed_when: false
+
+        - name: Write the synthetic snapshot metadata
+          ansible.builtin.copy:
+            content: |
+              {
+                "type": "btrfs",
+                "subvolumes": {"@": [], "@home": []}
+              }
+            dest: "{{ tier2_snapshot_dir }}/info.json"
+            mode: "0644"
+          changed_when: false
+
+        - name: Point detection at the synthetic device
+          ansible.builtin.set_fact:
+            timeshift_device: "{{ tier2_loop.stdout | trim }}"
+
+        - name: Run the snapshot role
+          ansible.builtin.include_role:
+            name: snapshot
+
+        - name: Assert detection and validation succeeded
+          ansible.builtin.assert:
+            that:
+              - snapshot_root_dir == tier2_snapshots
+              - resolved_snapshot == tier2_snapshot_name
+              - snapshot_root == tier2_snapshot_dir + '/@'
+              - snapshot_home == tier2_snapshot_dir + '/@home'
+              - vm_disk_real == tier2_images + '/vm.qcow2'
+            fail_msg: "Synthetic BTRFS detection/validation did not match"
+            success_msg: >-
+              Validated synthetic snapshot {{ resolved_snapshot }} at
+              {{ snapshot_root_dir }}
+      always:
+        - name: Unmount the synthetic filesystem
+          ansible.builtin.command:
+            cmd: "umount {{ tier2_mount }}"
+          changed_when: false
+          failed_when: false
+
+        - name: Remove the sandbox
+          ansible.builtin.command:
+            cmd: "rm -rf {{ tier2_sandbox }}"
+          changed_when: false
+          failed_when: false
