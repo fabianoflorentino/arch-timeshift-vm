@@ -14,10 +14,7 @@ exclude_paths:
   - .venv/
   - molecule/*/.molecule/
   # Remaining legacy roles, rewritten phase by phase (docs/PLAN.md).
-  - roles/boot/
-  - roles/disk/
   - roles/libvirt/
-  - roles/restore/
 
 skip_list:
   # The snapshot role intentionally consumes the project-wide configuration

@@ -47,3 +47,53 @@
           - not tier2_sandbox_stat.stat.exists
         fail_msg: "Tier 2 left sandbox residue at {{ tier2_sandbox }}"
         quiet: true
+
+    - name: Detect leftover mounts below the sandbox
+      ansible.builtin.shell: |
+        set -uo pipefail
+        findmnt --list --noheadings --output TARGET \
+          | grep -E "^{{ tier2_sandbox }}(/|$)" || true
+      args:
+        executable: /bin/bash
+      register: tier2_leftover_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Assert no leftover mounts remain
+      ansible.builtin.assert:
+        that:
+          - tier2_leftover_mounts.stdout | trim == ''
+        fail_msg: >-
+          Tier 2 left mounts behind:
+          {{ tier2_leftover_mounts.stdout | trim }}
+        quiet: true
+
+    - name: Detect NBD devices still serving the sandbox
+      ansible.builtin.shell: |
+        set -uo pipefail
+        found=""
+        for nbd in /dev/nbd*; do
+          [ -b "$nbd" ] || continue
+          pid_file="/sys/block/$(basename "$nbd")/pid"
+          [ -r "$pid_file" ] || continue
+          pid="$(cat "$pid_file" 2>/dev/null || true)"
+          [ -n "$pid" ] || continue
+          if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "{{ tier2_sandbox }}"; then
+            found="$found $(basename "$nbd")"
+          fi
+        done
+        echo "$found" | tr -s ' ' | sed -e 's/^ //'
+      args:
+        executable: /bin/bash
+      register: tier2_leftover_nbd
+      changed_when: false
+      failed_when: false
+
+    - name: Assert no NBD device still serves the sandbox
+      ansible.builtin.assert:
+        that:
+          - tier2_leftover_nbd.stdout | trim == ''
+        fail_msg: >-
+          Tier 2 left NBD devices connected:
+          {{ tier2_leftover_nbd.stdout | trim }}
+        quiet: true

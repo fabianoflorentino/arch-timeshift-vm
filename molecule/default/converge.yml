@@ -199,3 +199,163 @@
           - tier1_selector_guard | default(false)
         fail_msg: "One or more preflight guards did not fire as expected"
         success_msg: "All snapshot preflight guards fired correctly"
+
+    - name: Disk role - validate defaults
+      block:
+        - name: Include the disk role defaults
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../../roles/disk/defaults/main.yml"
+            name: disk_defaults
+
+        - name: Assert disk role defaults are defined
+          ansible.builtin.assert:
+            that:
+              - disk_defaults.disk_btrfs_label is defined
+              - disk_defaults.disk_btrfs_label | length > 0
+              - disk_defaults.disk_nbd_max_retries is defined
+              - disk_defaults.disk_nbd_max_retries | int > 0
+              - disk_defaults.disk_nbd_wait_timeout is defined
+              - disk_defaults.disk_nbd_wait_timeout | int > 0
+              - disk_defaults.disk_mount_opts_btrfs is defined
+              - disk_defaults.disk_mount_opts_efi is defined
+            fail_msg: "Disk role defaults are missing or invalid"
+
+    - name: Disk role - teardown idempotency (no-op when nothing mounted)
+      block:
+        - name: Seed teardown variables (no mounts, no NBD)
+          ansible.builtin.set_fact:
+            vm_mount_root: /tmp/nonexistent-mount
+            vm_mount_efi: /tmp/nonexistent-efi
+            nbd_device: /dev/nonexistent
+            vm_disk: /tmp/nonexistent.qcow2
+
+        - name: Run teardown (should be a no-op)
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../../roles/disk/tasks/teardown.yml"
+
+        - name: Record successful teardown idempotency
+          ansible.builtin.set_fact:
+            tier1_teardown_idempotent: true
+      rescue:
+        - name: Record failed teardown idempotency
+          ansible.builtin.set_fact:
+            tier1_teardown_idempotent: false
+
+        - name: Fail the test
+          ansible.builtin.fail:
+            msg: "Teardown is not idempotent when nothing is mounted"
+
+    - name: Assert disk role tests passed
+      ansible.builtin.assert:
+        that:
+          - tier1_teardown_idempotent | default(false)
+        fail_msg: "Disk role tests failed"
+        success_msg: "Disk role Tier 1 tests passed"
+
+    - name: Restore role - validate required facts are enforced
+      block:
+        - name: Run restore role with missing facts
+          ansible.builtin.include_role:
+            name: restore
+          vars:
+            snapshot_root: ""
+            snapshot_home: ""
+            nbd_device: ""
+            vm_btrfs_uuid: ""
+            vm_efi_uuid: ""
+            vm_mount_root: ""
+
+        - name: Record a failed validation guard
+          ansible.builtin.set_fact:
+            tier1_restore_validation_guard: false
+      rescue:
+        - name: Record a successful validation guard
+          ansible.builtin.set_fact:
+            tier1_restore_validation_guard: true
+
+    - name: Restore role - fstab template generates correct content
+      block:
+        - name: Seed partition UUIDs for fstab rendering
+          ansible.builtin.set_fact:
+            vm_btrfs_uuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+            vm_efi_uuid: "11111111-2222-3333-4444-555555555555"
+
+        - name: Render the fstab template
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../../roles/restore/templates/fstab.j2"
+            dest: /tmp/tier1-fstab.rendered
+            mode: "0644"
+
+        - name: Read the rendered fstab
+          ansible.builtin.slurp:
+            src: /tmp/tier1-fstab.rendered
+          register: tier1_fstab_content
+
+        - name: Assert fstab contains correct UUID references
+          ansible.builtin.assert:
+            that:
+              - "'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' in tier1_fstab_content.content | b64decode"
+              - "'11111111-2222-3333-4444-555555555555' in tier1_fstab_content.content | b64decode"
+              - "'subvol=/@' in tier1_fstab_content.content | b64decode"
+              - "'subvol=/@home' in tier1_fstab_content.content | b64decode"
+              - "'/boot' in tier1_fstab_content.content | b64decode"
+            fail_msg: "Fstab template did not render correctly"
+            success_msg: "Fstab template renders correct UUID references"
+
+        - name: Record successful fstab test
+          ansible.builtin.set_fact:
+            tier1_fstab_test: true
+      rescue:
+        - name: Record failed fstab test
+          ansible.builtin.set_fact:
+            tier1_fstab_test: false
+
+    - name: Assert restore role tests passed
+      ansible.builtin.assert:
+        that:
+          - tier1_restore_validation_guard | default(false)
+          - tier1_fstab_test | default(false)
+        fail_msg: "Restore role tests failed"
+        success_msg: "Restore role Tier 1 tests passed"
+
+    - name: Boot role - validate required facts are enforced
+      block:
+        - name: Run boot role with missing facts
+          ansible.builtin.include_role:
+            name: boot
+          vars:
+            work_dir: ""
+            nbd_device: ""
+
+        - name: Record a failed validation guard
+          ansible.builtin.set_fact:
+            tier1_boot_validation_guard: false
+      rescue:
+        - name: Record a successful validation guard
+          ansible.builtin.set_fact:
+            tier1_boot_validation_guard: true
+
+    - name: Boot role - validate restored root check is enforced
+      block:
+        - name: Run boot role with non-existent restored root
+          ansible.builtin.include_role:
+            name: boot
+          vars:
+            work_dir: "/tmp/nonexistent-workdir"
+            nbd_device: "/dev/nonexistent"
+
+        - name: Record a failed restored root guard
+          ansible.builtin.set_fact:
+            tier1_boot_restored_root_guard: false
+      rescue:
+        - name: Record a successful restored root guard
+          ansible.builtin.set_fact:
+            tier1_boot_restored_root_guard: true
+
+    - name: Assert boot role tests passed
+      ansible.builtin.assert:
+        that:
+          - tier1_boot_validation_guard | default(false)
+          - tier1_boot_restored_root_guard | default(false)
+        fail_msg: "Boot role tests failed"
+        success_msg: "Boot role Tier 1 tests passed"
