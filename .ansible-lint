@@ -1,0 +1,16 @@
+---
+# Lint baseline.
+#
+# The five legacy roles under roles/ are being rewritten phase by phase
+# (see docs/PLAN.md). Each phase removes its role from exclude_paths and
+# guarantees zero findings for that role before the next phase starts.
+profile: production
+
+exclude_paths:
+  - .agents/
+  - .ansible/
+  - .cache/
+  - .docker/
+  - .venv/
+  - molecule/*/.molecule/
+  - roles/

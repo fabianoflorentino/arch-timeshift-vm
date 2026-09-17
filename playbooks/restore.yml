@@ -1,0 +1,12 @@
+---
+- name: Restore an Arch Timeshift snapshot into a disposable libvirt VM
+  hosts: localhost
+  become: true
+  gather_facts: true
+
+  roles:
+    - snapshot
+    - disk
+    - restore
+    - boot
+    - libvirt

@@ -1,0 +1,64 @@
+---
+- name: Require explicit confirmation
+  ansible.builtin.assert:
+    that:
+      - confirm_restore | bool
+    fail_msg: >-
+      This playbook creates/overwrites a VM disk. Run with
+      -e confirm_restore=true after reviewing the variables.
+
+- name: Check required commands
+  ansible.builtin.command: "bash -lc 'command -v {{ item }}'"
+  loop:
+    - btrfs
+    - qemu-img
+    - qemu-nbd
+    - sgdisk
+    - mkfs.fat
+    - virsh
+    - grub-install
+  changed_when: false
+
+- name: Find latest Timeshift snapshot
+  ansible.builtin.shell: |
+    set -euo pipefail
+    find "{{ timeshift_root }}" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
+      sort -V | tail -n1
+  args:
+    executable: /bin/bash
+  register: latest_snapshot
+  changed_when: false
+  when: snapshot == "latest"
+
+- name: Resolve snapshot name
+  ansible.builtin.set_fact:
+    resolved_snapshot: "{{ latest_snapshot.stdout | trim if snapshot == 'latest' else snapshot }}"
+
+- name: Set snapshot paths
+  ansible.builtin.set_fact:
+    snapshot_dir: "{{ timeshift_root }}/{{ resolved_snapshot }}"
+    snapshot_root: "{{ timeshift_root }}/{{ resolved_snapshot }}/@"
+    snapshot_home: "{{ timeshift_root }}/{{ resolved_snapshot }}/@home"
+
+- name: Verify snapshot structure
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ snapshot_root }}"
+    - "{{ snapshot_home }}"
+  register: snapshot_stats
+
+- name: Assert snapshot exists
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+    fail_msg: "Missing expected snapshot path: {{ item.item }}"
+  loop: "{{ snapshot_stats.results }}"
+
+- name: Show selected snapshot
+  ansible.builtin.debug:
+    msg:
+      - "Snapshot: {{ resolved_snapshot }}"
+      - "Root: {{ snapshot_root }}"
+      - "Home: {{ snapshot_home }}"

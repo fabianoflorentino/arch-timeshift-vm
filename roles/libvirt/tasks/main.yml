@@ -1,0 +1,78 @@
+---
+- name: Create NVRAM directory
+  ansible.builtin.file:
+    path: "{{ nvram_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Find OVMF code image
+  ansible.builtin.shell: |
+    set -euo pipefail
+    find /usr/share/edk2/x64 -maxdepth 1 -type f -name 'OVMF_CODE.4m.fd' -print -quit
+  args:
+    executable: /bin/bash
+  register: ovmf_code_find
+  changed_when: false
+
+- name: Find OVMF vars template
+  ansible.builtin.shell: |
+    set -euo pipefail
+    find /usr/share/edk2/x64 -maxdepth 1 -type f -name 'OVMF_VARS.4m.fd' -print -quit
+  args:
+    executable: /bin/bash
+  register: ovmf_vars_find
+  changed_when: false
+
+- name: Set OVMF paths
+  ansible.builtin.set_fact:
+    ovmf_code: "{{ ovmf_code_find.stdout | trim }}"
+    ovmf_vars_template: "{{ ovmf_vars_find.stdout | trim }}"
+    nvram_file: "{{ nvram_dir }}/{{ vm_name }}_VARS.fd"
+
+- name: Validate OVMF paths
+  ansible.builtin.assert:
+    that:
+      - ovmf_code | length > 0
+      - ovmf_vars_template | length > 0
+    fail_msg: "OVMF 4m firmware files were not found."
+
+- name: Create per-VM NVRAM
+  ansible.builtin.copy:
+    src: "{{ ovmf_vars_template }}"
+    dest: "{{ nvram_file }}"
+    remote_src: true
+    mode: "0644"
+
+- name: Generate libvirt XML
+  ansible.builtin.template:
+    src: domain.xml.j2
+    dest: "{{ work_dir }}/{{ vm_name }}.xml"
+    mode: "0644"
+
+- name: Validate libvirt XML
+  ansible.builtin.command:
+    argv:
+      - virsh
+      - define
+      - "{{ work_dir }}/{{ vm_name }}.xml"
+  register: virsh_define
+  changed_when: true
+
+- name: Start restored VM
+  ansible.builtin.command: "virsh start {{ vm_name }}"
+  register: vm_start
+  changed_when: true
+
+- name: Show VM status
+  ansible.builtin.command: "virsh domstate {{ vm_name }}"
+  register: vm_state
+  changed_when: false
+
+- name: Show result
+  ansible.builtin.debug:
+    msg:
+      - "VM: {{ vm_name }}"
+      - "Snapshot: {{ resolved_snapshot }}"
+      - "State: {{ vm_state.stdout }}"
+      - "Disk: {{ vm_disk }}"
+      - "NVRAM: {{ nvram_file }}"

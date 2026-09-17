@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: restore
+  author: Fabiano Santos Florentino
+  description: Receive the snapshot subvolumes and install a VM-specific fstab.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: ArchLinux
+      versions:
+        - all
+  galaxy_tags:
+    - archlinux
+    - btrfs
+    - restore
+
+dependencies: []

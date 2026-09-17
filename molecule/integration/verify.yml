@@ -1,0 +1,36 @@
+---
+- name: Verify - repository contract
+  hosts: all
+  become: false
+  gather_facts: false
+
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+
+  tasks:
+    - name: Stat expected project paths
+      ansible.builtin.stat:
+        path: "{{ project_dir }}/{{ item }}"
+      loop:
+        - ansible.cfg
+        - requirements.yml
+        - requirements-dev.txt
+        - playbooks/restore.yml
+        - group_vars/all.yml
+        - inventory/localhost.yml
+        - roles/snapshot
+        - roles/disk
+        - roles/restore
+        - roles/boot
+        - roles/libvirt
+      register: project_paths
+
+    - name: Assert every expected path exists
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: "Missing expected project path: {{ item.item }}"
+        quiet: true
+      loop: "{{ project_paths.results }}"
+      loop_control:
+        label: "{{ item.item }}"

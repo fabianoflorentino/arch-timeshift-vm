@@ -1,0 +1,23 @@
+---
+# Tier 2 - privileged tests against a local sandbox (NBD, BTRFS, mkfs, virsh).
+# Runs on the current host through the delegated (default) driver.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../requirements.yml
+driver:
+  name: default
+  options:
+    managed: false
+    login_cmd_template: bash -l
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+verifier:
+  name: ansible

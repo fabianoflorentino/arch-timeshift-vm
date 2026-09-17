@@ -1,0 +1,30 @@
+---
+extends: default
+
+ignore: |
+  .agents/
+  .ansible/
+  .cache/
+  .docker/
+  .git/
+  .venv/
+  molecule/*/.molecule/
+
+rules:
+  document-start:
+    present: true
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: false
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true

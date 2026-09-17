@@ -1,0 +1,32 @@
+---
+# Safety: the playbook will refuse to proceed unless this is true.
+confirm_restore: false
+
+vm_name: archlinux-timeshift
+vm_memory_mib: 4096
+vm_vcpus: 4
+vm_machine: pc-q35-11.1
+
+vm_disk: /data/libvirt/images/{{ vm_name }}.qcow2
+vm_disk_size: 120G
+
+# Host paths
+timeshift_root: /timeshift-btrfs/snapshots
+work_dir: /data/timeshift-vm-work
+nvram_dir: /var/lib/libvirt/qemu/nvram
+
+# Set to "latest" or an exact Timeshift snapshot directory name.
+snapshot: latest
+
+# EFI partition size in MiB
+efi_size_mib: 1024
+
+# VM networking
+network_name: default
+mac_address: "52:54:00:93:12:1b"
+
+# Optional: leave the ISO attached for rescue. VM still boots from disk first.
+arch_iso: /data/libvirt/iso/archlinux-x86_64.iso
+
+# Kept identical to the known-working VM.
+spice_rendernode: /dev/dri/by-path/pci-0000:00:02.0-render

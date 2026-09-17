@@ -1,0 +1,26 @@
+---
+- name: Converge - Tier 1 harness sanity
+  hosts: all
+  become: false
+  gather_facts: true
+
+  tasks:
+    - name: Assert the managed node is Arch Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_facts["os_family"] == "Archlinux"
+          - ansible_facts["distribution"] == "Archlinux"
+        fail_msg: "Tier 1 container is not Arch Linux (family={{ ansible_facts['os_family'] }})"
+        success_msg: "Tier 1 container is Arch Linux {{ ansible_facts['distribution_version'] }}"
+
+    - name: Ensure the harness directory exists
+      ansible.builtin.file:
+        path: /etc/arch-timeshift-vm
+        state: directory
+        mode: "0755"
+
+    - name: Create the harness marker
+      ansible.builtin.copy:
+        content: "tier1-ok\n"
+        dest: /etc/arch-timeshift-vm/tier1-ok
+        mode: "0644"

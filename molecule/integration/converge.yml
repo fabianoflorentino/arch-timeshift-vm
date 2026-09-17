@@ -1,0 +1,31 @@
+---
+- name: Converge - Tier 2 host contract (read-only)
+  hosts: all
+  become: false
+  gather_facts: false
+
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+
+  tasks:
+    - name: Load project variables
+      ansible.builtin.include_vars:
+        file: "{{ project_dir }}/group_vars/all.yml"
+        name: project
+
+    - name: Assert the safety default is in place
+      ansible.builtin.assert:
+        that:
+          - project.confirm_restore is defined
+          - not (project.confirm_restore | bool)
+        fail_msg: "confirm_restore must default to false"
+
+    - name: Assert required variables exist
+      ansible.builtin.assert:
+        that:
+          - project.vm_name is defined
+          - project.vm_name | length > 0
+          - project.vm_disk is defined
+          - project.timeshift_root is defined
+          - project.work_dir is defined
+        fail_msg: "group_vars/all.yml is missing required variables"

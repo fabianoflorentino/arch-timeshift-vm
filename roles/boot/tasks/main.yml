@@ -1,0 +1,130 @@
+---
+- name: Create chroot mount directories
+  ansible.builtin.file:
+    path: "{{ work_dir }}/mnt-root/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - dev
+    - proc
+    - sys
+    - run
+
+- name: Bind mount /dev
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root/dev"
+    src: /dev
+    opts: bind
+    fstype: none
+    state: mounted
+
+- name: Bind mount /sys
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root/sys"
+    src: /sys
+    opts: bind
+    fstype: none
+    state: mounted
+
+- name: Bind mount /run
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root/run"
+    src: /run
+    opts: bind
+    fstype: none
+    state: mounted
+
+- name: Mount proc
+  ansible.builtin.command:
+    argv:
+      - mount
+      - -t
+      - proc
+      - proc
+      - "{{ work_dir }}/mnt-root/proc"
+  changed_when: true
+
+- name: Ensure resolver is available
+  ansible.builtin.copy:
+    src: /etc/resolv.conf
+    dest: "{{ work_dir }}/mnt-root/etc/resolv.conf.host"
+    remote_src: true
+    mode: "0644"
+
+- name: Install GRUB UEFI into restored system
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ work_dir }}/mnt-root"
+      - grub-install
+      - --target=x86_64-efi
+      - --efi-directory=/boot
+      - --bootloader-id=ArchLinux
+      - --no-nvram
+      - --recheck
+
+- name: Generate GRUB configuration
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ work_dir }}/mnt-root"
+      - grub-mkconfig
+      - -o
+      - /boot/grub/grub.cfg
+
+- name: Verify kernel exists
+  ansible.builtin.stat:
+    path: "{{ work_dir }}/mnt-root/boot/vmlinuz-linux"
+  register: kernel_file
+
+- name: Verify initramfs exists
+  ansible.builtin.stat:
+    path: "{{ work_dir }}/mnt-root/boot/initramfs-linux.img"
+  register: initramfs_file
+
+- name: Verify GRUB EFI binary
+  ansible.builtin.stat:
+    path: "{{ work_dir }}/mnt-root/boot/EFI/ArchLinux/grubx64.efi"
+  register: grub_efi_file
+
+- name: Verify boot artifacts
+  ansible.builtin.assert:
+    that:
+      - kernel_file.stat.exists
+      - initramfs_file.stat.exists
+      - grub_efi_file.stat.exists
+    fail_msg: "Boot validation failed."
+
+- name: Unmount chroot mounts
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root/{{ item }}"
+    state: unmounted
+  loop:
+    - proc
+    - run
+    - sys
+    - dev
+
+- name: Unmount restored home
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root/home"
+    state: unmounted
+
+- name: Unmount restored EFI
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root/boot"
+    state: unmounted
+
+- name: Unmount restored root
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root"
+    state: unmounted
+
+- name: Unmount top-level BTRFS
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt"
+    state: unmounted
+
+- name: Disconnect NBD
+  ansible.builtin.command: "qemu-nbd --disconnect {{ nbd_device }}"
+  changed_when: true

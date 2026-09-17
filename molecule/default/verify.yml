@@ -1,0 +1,17 @@
+---
+- name: Verify - Tier 1 harness sanity
+  hosts: all
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Read the harness marker
+      ansible.builtin.slurp:
+        src: /etc/arch-timeshift-vm/tier1-ok
+      register: tier1_marker
+
+    - name: Assert the marker content
+      ansible.builtin.assert:
+        that:
+          - "'tier1-ok' in (tier1_marker.content | b64decode)"
+        fail_msg: "Tier 1 marker was not found or has unexpected content"

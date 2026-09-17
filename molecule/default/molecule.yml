@@ -1,0 +1,27 @@
+---
+# Tier 1 - fast, unprivileged tests of configuration, templates and logic.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: arch-timeshift-test
+    image: arch-timeshift-test:latest
+    pre_build_image: true
+    command: sleep infinity
+    tmpfs:
+      - /tmp
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/roles
+  inventory:
+    host_vars:
+      localhost:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      arch-timeshift-test:
+        ansible_python_interpreter: /usr/bin/python
+verifier:
+  name: ansible

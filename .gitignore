@@ -1,0 +1,34 @@
+# Python / virtualenv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Ansible
+.ansible/
+*.retry
+.cache/
+
+# Molecule
+molecule/*/.molecule/
+molecule/*/__pycache__/
+
+# Test harness
+.docker/
+
+# Agent skills are reproducible from skills-lock.json
+.agents/
+
+# Editors / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local (non-versioned) overrides
+group_vars/all.local.yml
+host_vars/
+!host_vars/.gitkeep
+
+# Run artifacts
+*.log

@@ -1,0 +1,108 @@
+---
+- name: Receive root snapshot
+  ansible.builtin.shell: |
+    set -o pipefail
+    btrfs send "{{ snapshot_root }}" | btrfs receive "{{ work_dir }}/mnt"
+  args:
+    executable: /bin/bash
+  register: root_receive
+  changed_when: true
+
+- name: Receive home snapshot
+  ansible.builtin.shell: |
+    set -o pipefail
+    btrfs send "{{ snapshot_home }}" | btrfs receive "{{ work_dir }}/mnt"
+  args:
+    executable: /bin/bash
+  register: home_receive
+  changed_when: true
+
+- name: Make restored root writable
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - property
+      - set
+      - -f
+      - -ts
+      - "{{ work_dir }}/mnt/@"
+      - ro
+      - false
+
+- name: Make restored home writable
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - property
+      - set
+      - -f
+      - -ts
+      - "{{ work_dir }}/mnt/@home"
+      - ro
+      - false
+
+- name: Create restored root mountpoint
+  ansible.builtin.file:
+    path: "{{ work_dir }}/mnt-root"
+    state: directory
+    mode: "0755"
+
+- name: Mount restored root
+  ansible.posix.mount:
+    path: "{{ work_dir }}/mnt-root"
+    src: "{{ nbd_device }}p2"
+    fstype: btrfs
+    opts: "subvol=@,compress=zstd:3"
+    state: mounted
+
+- name: Remount root correctly
+  ansible.builtin.mount:
+    path: "{{ work_dir }}/mnt-root"
+    src: "{{ nbd_device }}p2"
+    fstype: btrfs
+    opts: "subvol=@,compress=zstd:3"
+    state: mounted
+
+- name: Create home and boot directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ work_dir }}/mnt-root/home"
+    - "{{ work_dir }}/mnt-root/boot"
+
+- name: Mount restored home
+  ansible.builtin.mount:
+    path: "{{ work_dir }}/mnt-root/home"
+    src: "{{ nbd_device }}p2"
+    fstype: btrfs
+    opts: "subvol=@home,compress=zstd:3"
+    state: mounted
+
+- name: Mount EFI into restored system
+  ansible.builtin.mount:
+    path: "{{ work_dir }}/mnt-root/boot"
+    src: "{{ nbd_device }}p1"
+    fstype: vfat
+    opts: "fmask=0022,dmask=0022"
+    state: mounted
+
+- name: Backup original fstab
+  ansible.builtin.copy:
+    src: "{{ work_dir }}/mnt-root/etc/fstab"
+    dest: "{{ work_dir }}/mnt-root/etc/fstab.host"
+    remote_src: true
+    force: false
+
+- name: Install VM fstab
+  ansible.builtin.template:
+    src: fstab.j2
+    dest: "{{ work_dir }}/mnt-root/etc/fstab"
+    mode: "0644"
+
+- name: Ensure grub 10_linux is executable
+  ansible.builtin.file:
+    path: "{{ work_dir }}/mnt-root/etc/grub.d/10_linux"
+    mode: "0755"
+    state: file
