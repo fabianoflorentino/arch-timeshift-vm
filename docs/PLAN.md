@@ -73,8 +73,8 @@ Gate: `make lint` limpo no escopo e `molecule test -s default` verde. ✅
 
 ### Fase 1 - Preflight (role `snapshot`)
 
-Status: implementado. Tier 1 verde (positivos, negativos e idempotência);
-Tier 2 aguardando execução com root (`make test-integration`).
+Status: implementado. Tier 1 e Tier 2 verdes (positivos, negativos,
+idempotência e validação completa com BTRFS sintético).
 
 - Detecção automática do topo do BTRFS e do diretório real de snapshots via
   `findmnt`, sem hardcode (`timeshift_root: auto`).
@@ -86,40 +86,43 @@ Tier 2 aguardando execução com root (`make test-integration`).
 - Role lint-clean (`roles/snapshot` fora de `exclude_paths`).
 
 Gate: positivos/negativos/idempotência no Tier 1 ✅ (+ Tier 2 de detecção
-com BTRFS sintético em loopback, pendente de execução).
+com BTRFS sintético em loopback executado com sucesso).
 
 ### Fase 2 - Disco atômico e sem resíduo (role `disk`)
 
-Status: pendente.
+Status: implementado e validado (Tier 2 verde).
 
 - qcow2 em `vm_disk.new` + troca atômica.
 - NBD com retry e espera por `size > 0`; teardown idempotente.
 - Corrigir alinhamento GPT (`--new=1:0:+...`).
 - Mounts efêmeros (fim da poluição do `/etc/fstab` do host).
-- `block/rescue/always` + role `cleanup`.
+- `block/rescue/always` + `teardown.yml` por role.
 
-Gate: Tier 2 com NBD/BTRFS reais, fstab do host inalterado, cleanup em falha.
+Gate: Tier 2 com NBD/BTRFS reais, fstab do host inalterado, cleanup em falha. ✅
 
 ### Fase 3 - Restore confiável (role `restore`)
 
-Status: pendente.
+Status: implementado e validado (Tier 2 verde).
 
 - `btrfs send|receive` com `pipefail` e verificação pós-receive.
 - fstab da VM com UUIDs novos + backup do original.
-- Identidade do clone: `machine-id`, hostname, host keys.
+- Identidade do clone: `machine-id` zerado, hostname = `vm_name`, SSH host
+  keys removidas.
 
-Gate: Tier 2 com snapshot sintético e marcador.
+Gate: Tier 2 com snapshot sintético e marcador. ✅
 
 ### Fase 4 - Boot (role `boot`)
 
-Status: pendente.
+Status: implementado e validado (Tier 2 verde).
 
-- Bloqueador: `/boot` é ESP separado e **não está no snapshot** - semear o
-  kernel de `/usr/lib/modules/*/vmlinuz` + `mkinitcpio -P`.
-- `grub-install --removable` + `efibootmgr`; verificação de artefatos.
-- Simplificar binds (o `arch-chroot` já monta os API filesystems).
+- `/boot` é ESP separado e **não está no snapshot**: o kernel é semeado de
+  `/usr/lib/modules/*/vmlinuz` e o initramfs é gerado com `mkinitcpio -P`.
+- `grub-install --removable` (caminho `EFI/BOOT/BOOTX64.EFI`, sem NVRAM) +
+  `grub-mkconfig`; verificação de artefatos.
+- Binds delegados ao `arch-chroot`; o role apenas garante os mount points.
+- `boot_allow_missing_grub` existe só como costura do Tier 2 (default false).
 
-Gate: 4a (lógica, mock) + 4b (GRUB real no sandbox).
+Gate: 4a (lógica) + 4b (GRUB real no sandbox) ✅
 
 ### Fase 5 - libvirt + cleanup (role `libvirt`)
 
@@ -147,8 +150,9 @@ Gate: `make e2e` verde.
 1. ~~`timeshift_root` aponta para `/timeshift-btrfs/snapshots`, que não
    existe.~~ Resolvido na Fase 1: `timeshift_root: auto` detecta o topo do
    BTRFS (`/mnt/btrfs-top`) via `findmnt`.
-2. Kernel/initramfs ficam no ESP vfat separado, fora do snapshot BTRFS.
-   O `@/boot` está vazio. (Fase 4)
-3. `sgdisk`, `mkfs.fat` e `arch-chroot` não estão instalados no host. A Fase 1
-   já reporta os ausentes de forma clara; o Tier 2 usa um subconjunto válido
-   até a instalação (necessária nas Fases 2 e 4).
+2. ~~Kernel/initramfs ficam no ESP vfat separado, fora do snapshot BTRFS.
+   O `@/boot` está vazio.~~ Resolvido na Fase 4: o role `boot` semeia o kernel
+   de `/usr/lib/modules/*/vmlinuz` e roda `mkinitcpio -P` no chroot.
+3. ~~`sgdisk`, `mkfs.fat` e `arch-chroot` não estão instalados no host.~~ Os
+   comandos foram instalados (`arch-install-scripts`, `gptfdisk`,
+   `dosfstools`); o Tier 2 agora usa o conjunto completo do pipeline.

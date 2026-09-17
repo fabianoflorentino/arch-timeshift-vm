@@ -4,8 +4,9 @@ Restaura um snapshot do Timeshift/BTRFS do host em uma VM libvirt/KVM
 bootável e descartável, inteiramente no host - sem VirtioFS e sem ISO de
 instalação.
 
-> Status: reestruturação production-ready em andamento. Veja
-> [`docs/PLAN.md`](docs/PLAN.md) para o plano por fases e o andamento.
+> Status: fases 1-4 implementadas e validadas (preflight, disco, restore e
+> boot). Tier 1 e Tier 2 verdes. Veja [`docs/PLAN.md`](docs/PLAN.md) para o
+> plano por fases e o andamento.
 
 ## Como funciona
 
@@ -38,7 +39,7 @@ flowchart TB
     subgraph P2["2 · disk — alvo descartável (qcow2 + NBD)"]
         direction TB
         F["qemu-img create qcow2 temporário"]:::rw
-        G["qemu-nbd connect /dev/nbd0"]:::rw
+        G["qemu-nbd connect /dev/nbdN (detectado)"]:::rw
         H["sgdisk: GPT = ESP vfat + raiz BTRFS"]:::rw
         I["mkfs.fat + mkfs.btrfs<br/>monta em diretórios temporários"]:::rw
         F --> G --> H --> I
@@ -73,7 +74,7 @@ flowchart TB
     T --> O
     P --> VM(["VM bootável e descartável"]):::done
 
-    Cleanup["cleanup (always)<br/>umount · qemu-nbd -d · troca atômica do vm_disk"]:::danger
+    Cleanup["teardown (always)<br/>umount · qemu-nbd -d · troca atômica do vm_disk"]:::danger
     H -.->|em qualquer falha| Cleanup
     I -.->|em qualquer falha| Cleanup
     N -.->|em qualquer falha| Cleanup
@@ -81,7 +82,8 @@ flowchart TB
 ```
 
 Legenda: a fase 1 é somente leitura; as fases 2–5 mutam apenas o disco e o
-domínio libvirt da VM; o `cleanup` roda sempre (`block/rescue/always`).
+domínio libvirt da VM; o `teardown` roda sempre (`block/rescue/always` nos
+roles mutantes).
 
 ## Requisitos
 

@@ -21,7 +21,7 @@ Timeshift / BTRFS snapshot
   libvirt                   XML + NVRAM -> virsh define/start
         |
         v
-  cleanup (always)          desmonta tudo, desconecta NBD, remove residuo
+  teardown (always)         desmonta tudo, desconecta NBD, remove residuo
 ```
 
 ## Papel de cada role
@@ -33,7 +33,7 @@ Timeshift / BTRFS snapshot
 | `restore` | `btrfs receive`, fstab da VM, identidade do clone | sim (no disco da VM) |
 | `boot` | semear kernel/initramfs, instalar GRUB UEFI | sim (no disco da VM) |
 | `libvirt` | gerar XML, NVRAM, definir e iniciar o domínio | sim (libvirt) |
-| `cleanup` | desmontar, desconectar NBD, remover artefatos parciais | sim |
+| `disk`/`boot` (teardown) | desmontar, desconectar NBD, remover artefatos parciais | sim |
 
 ## Fluxo de variáveis
 
@@ -53,7 +53,7 @@ Timeshift / BTRFS snapshot
 - `/boot` é um ESP vfat **separado**, fora do snapshot BTRFS.
 - Kernel em `/usr/lib/modules/<ver>/vmlinuz` (esse sim dentro do snapshot).
 - QEMU 11.1, libvirt 12.7, rede `default` ativa, KVM aninhado habilitado.
-- `sgdisk`, `mkfs.fat` e `arch-chroot` ausentes (instalar antes do Tier 2).
+- `sgdisk`, `mkfs.fat` e `arch-chroot` instalados no host antes do Tier 2.
 
 ## Modelo de segurança
 
