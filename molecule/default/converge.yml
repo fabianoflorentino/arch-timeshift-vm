@@ -82,6 +82,49 @@
               - vm_disk_real == fixture_images + '/vm.qcow2'
             fail_msg: "Snapshot role resolved an unexpected preflight contract"
 
+    - name: Unit - the top-level mount selector picks fsroot "/" for the device
+      block:
+        - name: Seed a synthetic findmnt result
+          ansible.builtin.set_fact:
+            snapshot_device: /dev/nvme1n1p2
+            snapshot_btrfs_mounts:
+              stdout_lines:
+                - "/dev/nvme1n1p2[/@] / /@"
+                - "/dev/nvme1n1p2[/@home] /home /@home"
+                - "/dev/nvme1n1p2 /mnt/btrfs-top /"
+                - "/dev/loop9 /somewhere /"
+
+        - name: Run the top-level mount selector
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/select_btrfs_top_mount.yml
+
+        - name: Assert the selector picked the top-level mount
+          ansible.builtin.assert:
+            that:
+              - snapshot_top_mount == '/mnt/btrfs-top'
+            fail_msg: "Mount selector returned '{{ snapshot_top_mount }}'"
+
+    - name: Negative - the selector aborts when no top-level mount exists
+      block:
+        - name: Seed findmnt output without a top-level mount for the device
+          ansible.builtin.set_fact:
+            snapshot_device: /dev/loop9
+            snapshot_btrfs_mounts:
+              stdout_lines:
+                - "/dev/nvme1n1p2 / /@"
+
+        - name: Run the top-level mount selector
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/select_btrfs_top_mount.yml
+
+        - name: Record a failed selector guard
+          ansible.builtin.set_fact:
+            tier1_selector_guard: false
+      rescue:
+        - name: Record a successful selector guard
+          ansible.builtin.set_fact:
+            tier1_selector_guard: true
+
     - name: Negative - confirm_restore=false must abort
       block:
         - name: Run the snapshot role without confirmation
@@ -153,5 +196,6 @@
           - tier1_disk_guard | default(false)
           - tier1_snapshot_guard | default(false)
           - tier1_space_guard | default(false)
+          - tier1_selector_guard | default(false)
         fail_msg: "One or more preflight guards did not fire as expected"
         success_msg: "All snapshot preflight guards fired correctly"

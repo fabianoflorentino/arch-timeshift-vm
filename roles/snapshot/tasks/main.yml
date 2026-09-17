@@ -58,33 +58,17 @@
              if (timeshift_device | default('') | length) > 0
              else (snapshot_root_source.stdout | trim | regex_replace('\\[.*\\]$', '')) }}
 
-    - name: List BTRFS mounts for the snapshot device
+    - name: List all BTRFS mounts
       ansible.builtin.command:
         cmd: >-
-          findmnt --raw --noheadings --output TARGET,FSROOT
-          --source {{ snapshot_device }} --types btrfs
+          findmnt --raw --noheadings --output SOURCE,TARGET,FSROOT
+          --types btrfs
       register: snapshot_btrfs_mounts
       changed_when: false
       failed_when: false
 
-    - name: Select the BTRFS top-level mount (fsroot "/")
-      ansible.builtin.set_fact:
-        snapshot_top_mount: >-
-          {{ snapshot_btrfs_mounts.stdout_lines | default([])
-             | select('match', '^\\S+\\s+/$')
-             | map('regex_replace', '\\s+/$', '')
-             | list | first | default('') }}
-
-    - name: Fail when the BTRFS top-level subvolume is not mounted
-      ansible.builtin.assert:
-        that:
-          - snapshot_top_mount | length > 0
-        fail_msg: >-
-          Could not find a mounted BTRFS top-level (subvolid=5) subvolume for
-          {{ snapshot_device }}. Mount it (for example
-          `mount -o subvolid=5 {{ snapshot_device }} /mnt/btrfs-top`) or set
-          timeshift_root explicitly.
-        quiet: true
+    - name: Select the BTRFS top-level mount and assert it is mounted
+      ansible.builtin.include_tasks: select_btrfs_top_mount.yml
 
     - name: Derive the Timeshift snapshot root from the top-level mount
       ansible.builtin.set_fact:
@@ -212,7 +196,7 @@
 
     - name: Read the read-only property of the snapshot @ subvolume
       ansible.builtin.command:
-        cmd: "btrfs property get --type subvolume {{ snapshot_root }} ro"
+        cmd: "btrfs property get -t subvol {{ snapshot_root }} ro"
       register: snapshot_root_ro
       changed_when: false
       failed_when: false

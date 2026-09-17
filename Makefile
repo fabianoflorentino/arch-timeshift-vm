@@ -8,6 +8,8 @@ SHELL := /bin/bash
 VENV ?= .venv
 BIN := $(VENV)/bin
 TEST_IMAGE ?= arch-timeshift-test:latest
+HOST_UID ?= $(shell id -u)
+HOST_GID ?= $(shell id -g)
 
 # Tests must talk to the *local* Docker daemon and bypass the broken
 # "desktop" credential store configured in ~/.docker/config.json.
@@ -59,7 +61,9 @@ test-integration: lint ## Molecule Tier 2 (privileged BTRFS checks; prompts for 
 > sudo -E env "PATH=$(CURDIR)/$(BIN):$$PATH" \
 >   "ANSIBLE_PYTHON_INTERPRETER=$(CURDIR)/$(BIN)/python" \
 >   "DOCKER_CONFIG=$(DOCKER_CONFIG)" "DOCKER_HOST=$(DOCKER_HOST)" \
->   $(BIN)/molecule test -s integration
+>   bash -c '$(BIN)/molecule test -s integration; rc=$$?; \
+>     chown -R $(HOST_UID):$(HOST_GID) "$$HOME"/.ansible/tmp/molecule.* 2>/dev/null || true; \
+>     exit $$rc'
 
 .PHONY: clean
 clean: ## Remove caches, docker config and molecule scratch

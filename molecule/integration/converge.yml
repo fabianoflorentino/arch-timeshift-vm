@@ -131,7 +131,7 @@
 
         - name: Mark the @ subvolume read-only
           ansible.builtin.command:
-            cmd: "btrfs property set --type subvolume {{ tier2_snapshot_dir }}/@ ro true"
+            cmd: "btrfs property set -t subvol {{ tier2_snapshot_dir }}/@ ro true"
           changed_when: false
 
         - name: Write the synthetic snapshot metadata

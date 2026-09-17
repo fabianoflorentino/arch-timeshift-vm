@@ -1,0 +1,27 @@
+---
+# Select the BTRFS top-level mount (fsroot "/") that belongs to snapshot_device
+# from an already-registered findmnt result in `snapshot_btrfs_mounts`.
+# Kept in its own task file so the selector can be unit-tested without a real
+# BTRFS filesystem.
+
+- name: Select the BTRFS top-level mount (fsroot "/") for the snapshot device
+  ansible.builtin.set_fact:
+    snapshot_top_mount: >-
+      {{ snapshot_btrfs_mounts.stdout_lines | default([])
+         | map('trim')
+         | select('search',
+             '^' ~ (snapshot_device | regex_escape) ~ '(\[[^]]*\])?\s+\S+\s+/\s*$')
+         | map('regex_replace', '^\S+\s+(\S+)\s+/\s*$', '\1')
+         | list | first | default('') }}
+
+- name: Fail when the BTRFS top-level subvolume is not mounted
+  ansible.builtin.assert:
+    that:
+      - snapshot_top_mount | length > 0
+    fail_msg: >-
+      Could not find a mounted BTRFS top-level (subvolid=5) subvolume for
+      {{ snapshot_device }}. Observed BTRFS mounts:
+      {{ snapshot_btrfs_mounts.stdout_lines | default([]) | join('; ') }}.
+      Mount it (for example `mount -o subvolid=5 {{ snapshot_device }}
+      /mnt/btrfs-top`) or set timeshift_root explicitly.
+    quiet: true

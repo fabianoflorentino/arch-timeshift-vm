@@ -4,7 +4,8 @@
 dependency:
   name: galaxy
   options:
-    requirements-file: ../../requirements.yml
+    role-file: ${MOLECULE_PROJECT_DIRECTORY}/requirements.yml
+    requirements-file: ${MOLECULE_PROJECT_DIRECTORY}/requirements.yml
 driver:
   name: default
   options:
@@ -14,6 +15,8 @@ platforms:
   - name: localhost
 provisioner:
   name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/roles
   inventory:
     host_vars:
       localhost:
@@ -21,3 +24,12 @@ provisioner:
         ansible_python_interpreter: "{{ ansible_playbook_python }}"
 verifier:
   name: ansible
+scenario:
+  # The delegated, unmanaged driver creates no resources, so create/prepare/
+  # side_effect/cleanup/destroy have no playbooks to run. Run only what exists.
+  test_sequence:
+    - dependency
+    - syntax
+    - converge
+    - idempotence
+    - verify
