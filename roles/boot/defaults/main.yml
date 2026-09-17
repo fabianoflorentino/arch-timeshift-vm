@@ -1,1 +1,9 @@
 ---
+# Synthetic test seam: when true, the role tolerates a restored system that
+# has no grub-install/mkinitcpio (the Tier 2 snapshot is intentionally empty).
+# Production defaults to false so a missing bootloader is a hard failure.
+boot_allow_missing_grub: false
+
+# Restored root mountpoint published by the restore role. Falls back to the
+# conventional work_dir/mnt-root layout when vm_mount_root is not provided.
+boot_restored_root: "{{ vm_mount_root | default(work_dir + '/mnt') }}-root"

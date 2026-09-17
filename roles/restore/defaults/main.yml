@@ -1,1 +1,4 @@
 ---
+restore_mount_opts_btrfs: "subvol=@,compress=zstd:3"
+restore_mount_opts_home: "subvol=@home,compress=zstd:3"
+restore_mount_opts_efi: "fmask=0022,dmask=0022"

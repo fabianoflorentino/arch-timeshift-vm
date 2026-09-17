@@ -1,0 +1,30 @@
+---
+- name: Teardown mounts and NBD
+  ansible.builtin.shell: |
+    set -x
+    # Unmount EFI first (nested inside BTRFS)
+    for mp in {{ vm_mount_efi | default('') }} {{ vm_mount_root | default('') }}; do
+      if [ -n "$mp" ]; then
+        for i in $(seq 1 10); do
+          if ! findmnt "$mp" >/dev/null 2>&1; then
+            echo "OK: $mp unmounted"
+            break
+          fi
+          echo "Attempt $i: unmounting $mp"
+          umount "$mp" 2>&1 && echo "OK: $mp unmounted" && break
+          echo "umount failed, trying lazy..."
+          umount -l "$mp" 2>&1 && echo "OK: $mp lazy-unmounted" && break
+          sleep 0.5
+        done
+      fi
+    done
+    # Disconnect NBD
+    if [ -n "{{ nbd_device | default('') }}" ] && [ -b "{{ nbd_device | default('/dev/null') }}" ]; then
+      qemu-nbd --disconnect {{ nbd_device }} 2>&1 || true
+    fi
+    # Remove temp disk
+    rm -f {{ vm_disk | default('/dev/null') }}.new
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false

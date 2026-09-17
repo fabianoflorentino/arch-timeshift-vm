@@ -1,108 +1,199 @@
 ---
-- name: Receive root snapshot
-  ansible.builtin.shell: |
-    set -o pipefail
-    btrfs send "{{ snapshot_root }}" | btrfs receive "{{ work_dir }}/mnt"
-  args:
-    executable: /bin/bash
-  register: root_receive
-  changed_when: true
+- name: Validate required facts from upstream roles
+  ansible.builtin.assert:
+    that:
+      - snapshot_root is defined
+      - snapshot_root | length > 0
+      - snapshot_home is defined
+      - snapshot_home | length > 0
+      - nbd_device is defined
+      - nbd_device | length > 0
+      - vm_btrfs_uuid is defined
+      - vm_btrfs_uuid | length > 0
+      - vm_efi_uuid is defined
+      - vm_efi_uuid | length > 0
+      - vm_mount_root is defined
+      - vm_mount_root | length > 0
+    fail_msg: >-
+      Restore role requires facts from snapshot and disk roles:
+      snapshot_root, snapshot_home, nbd_device, vm_btrfs_uuid,
+      vm_efi_uuid, vm_mount_root.
+    quiet: true
 
-- name: Receive home snapshot
-  ansible.builtin.shell: |
-    set -o pipefail
-    btrfs send "{{ snapshot_home }}" | btrfs receive "{{ work_dir }}/mnt"
-  args:
-    executable: /bin/bash
-  register: home_receive
-  changed_when: true
+- name: Restore snapshot subvolumes and install VM fstab
+  block:
+    - name: Receive root snapshot
+      ansible.builtin.shell: |
+        set -euo pipefail
+        btrfs send "{{ snapshot_root }}" | btrfs receive "{{ vm_mount_root }}"
+      args:
+        executable: /bin/bash
+      changed_when: true
 
-- name: Make restored root writable
-  ansible.builtin.command:
-    argv:
-      - btrfs
-      - property
-      - set
-      - -f
-      - -ts
-      - "{{ work_dir }}/mnt/@"
-      - ro
-      - false
+    - name: Receive home snapshot
+      ansible.builtin.shell: |
+        set -euo pipefail
+        btrfs send "{{ snapshot_home }}" | btrfs receive "{{ vm_mount_root }}"
+      args:
+        executable: /bin/bash
+      changed_when: true
 
-- name: Make restored home writable
-  ansible.builtin.command:
-    argv:
-      - btrfs
-      - property
-      - set
-      - -f
-      - -ts
-      - "{{ work_dir }}/mnt/@home"
-      - ro
-      - false
+    - name: Verify the received subvolumes exist
+      ansible.builtin.command:
+        cmd: btrfs subvolume show {{ vm_mount_root }}/{{ item }}
+      loop:
+        - "@"
+        - "@home"
+      changed_when: false
+      loop_control:
+        label: "{{ item }}"
 
-- name: Create restored root mountpoint
-  ansible.builtin.file:
-    path: "{{ work_dir }}/mnt-root"
-    state: directory
-    mode: "0755"
+    - name: Make restored root writable
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - property
+          - set
+          - -f
+          - -ts
+          - "{{ vm_mount_root }}/@"
+          - ro
+          - "false"
+      changed_when: true
 
-- name: Mount restored root
-  ansible.posix.mount:
-    path: "{{ work_dir }}/mnt-root"
-    src: "{{ nbd_device }}p2"
-    fstype: btrfs
-    opts: "subvol=@,compress=zstd:3"
-    state: mounted
+    - name: Make restored home writable
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - property
+          - set
+          - -f
+          - -ts
+          - "{{ vm_mount_root }}/@home"
+          - ro
+          - "false"
+      changed_when: true
 
-- name: Remount root correctly
-  ansible.builtin.mount:
-    path: "{{ work_dir }}/mnt-root"
-    src: "{{ nbd_device }}p2"
-    fstype: btrfs
-    opts: "subvol=@,compress=zstd:3"
-    state: mounted
+    - name: Create restored root mount point
+      ansible.builtin.file:
+        path: "{{ vm_mount_root }}-root"
+        state: directory
+        mode: "0755"
 
-- name: Create home and boot directories
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    mode: "0755"
-  loop:
-    - "{{ work_dir }}/mnt-root/home"
-    - "{{ work_dir }}/mnt-root/boot"
+    - name: Mount restored root  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: >-
+          mount -t btrfs -o {{ restore_mount_opts_btrfs }}
+          {{ nbd_device }}p2 {{ vm_mount_root }}-root
+      changed_when: true
 
-- name: Mount restored home
-  ansible.builtin.mount:
-    path: "{{ work_dir }}/mnt-root/home"
-    src: "{{ nbd_device }}p2"
-    fstype: btrfs
-    opts: "subvol=@home,compress=zstd:3"
-    state: mounted
+    - name: Create home and boot directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ vm_mount_root }}-root/home"
+        - "{{ vm_mount_root }}-root/boot"
 
-- name: Mount EFI into restored system
-  ansible.builtin.mount:
-    path: "{{ work_dir }}/mnt-root/boot"
-    src: "{{ nbd_device }}p1"
-    fstype: vfat
-    opts: "fmask=0022,dmask=0022"
-    state: mounted
+    - name: Mount restored home  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: >-
+          mount -t btrfs -o {{ restore_mount_opts_home }}
+          {{ nbd_device }}p2 {{ vm_mount_root }}-root/home
+      changed_when: true
 
-- name: Backup original fstab
-  ansible.builtin.copy:
-    src: "{{ work_dir }}/mnt-root/etc/fstab"
-    dest: "{{ work_dir }}/mnt-root/etc/fstab.host"
-    remote_src: true
-    force: false
+    - name: Mount EFI into restored system  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: >-
+          mount -t vfat -o {{ restore_mount_opts_efi }}
+          {{ nbd_device }}p1 {{ vm_mount_root }}-root/boot
+      changed_when: true
 
-- name: Install VM fstab
-  ansible.builtin.template:
-    src: fstab.j2
-    dest: "{{ work_dir }}/mnt-root/etc/fstab"
-    mode: "0644"
+    - name: Ensure /etc directory exists in restored root
+      ansible.builtin.file:
+        path: "{{ vm_mount_root }}-root/etc"
+        state: directory
+        mode: "0755"
 
-- name: Ensure grub 10_linux is executable
-  ansible.builtin.file:
-    path: "{{ work_dir }}/mnt-root/etc/grub.d/10_linux"
-    mode: "0755"
-    state: file
+    - name: Backup original fstab
+      ansible.builtin.copy:
+        src: "{{ vm_mount_root }}-root/etc/fstab"
+        dest: "{{ vm_mount_root }}-root/etc/fstab.host"
+        remote_src: true
+        force: false
+        mode: "0644"
+      changed_when: false
+      failed_when: false
+
+    - name: Install VM fstab
+      ansible.builtin.template:
+        src: fstab.j2
+        dest: "{{ vm_mount_root }}-root/etc/fstab"
+        mode: "0644"
+      changed_when: true
+
+    - name: Stat grub 10_linux in the clone
+      ansible.builtin.stat:
+        path: "{{ vm_mount_root }}-root/etc/grub.d/10_linux"
+      register: restore_grub_10linux
+
+    - name: Ensure grub 10_linux is executable
+      ansible.builtin.file:
+        path: "{{ vm_mount_root }}-root/etc/grub.d/10_linux"
+        mode: "0755"
+        state: file
+      when: restore_grub_10linux.stat.exists
+
+    - name: Reset the clone machine-id
+      ansible.builtin.copy:
+        content: ""
+        dest: "{{ vm_mount_root }}-root/etc/machine-id"
+        mode: "0444"
+      changed_when: true
+
+    - name: Remove the clone dbus machine-id
+      ansible.builtin.file:
+        path: "{{ vm_mount_root }}-root/var/lib/dbus/machine-id"
+        state: absent
+
+    - name: Set the clone hostname
+      ansible.builtin.copy:
+        content: "{{ vm_name | replace('_', '-') }}\n"
+        dest: "{{ vm_mount_root }}-root/etc/hostname"
+        mode: "0644"
+      changed_when: true
+
+    - name: Find stale SSH host keys in the clone
+      ansible.builtin.find:
+        paths: "{{ vm_mount_root }}-root/etc/ssh"
+        patterns: "ssh_host_*"
+        file_type: file
+      register: restore_ssh_host_keys
+      failed_when: false
+
+    - name: Remove stale SSH host keys
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ restore_ssh_host_keys.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+  rescue:
+    - name: Unmount restored mounts on failure
+      ansible.builtin.shell: |
+        set -e
+        for mp in {{ vm_mount_root }}-root/boot {{ vm_mount_root }}-root/home {{ vm_mount_root }}-root; do
+          if findmnt "$mp" >/dev/null 2>&1; then
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+
+    - name: Re-raise the error
+      ansible.builtin.fail:
+        msg: "Restore failed, cleaned up temporary mounts"

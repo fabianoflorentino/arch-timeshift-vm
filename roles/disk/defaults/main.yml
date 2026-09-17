@@ -1,1 +1,7 @@
 ---
+disk_btrfs_label: ArchVM
+disk_nbd_max_retries: 16
+disk_nbd_wait_timeout: 30
+disk_nbd_devices: /dev/nbd{0..15}
+disk_mount_opts_btrfs: subvolid=5
+disk_mount_opts_efi: fmask=0022,dmask=0022
