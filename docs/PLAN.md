@@ -126,14 +126,16 @@ Gate: 4a (lógica) + 4b (GRUB real no sandbox) ✅
 
 ### Fase 5 - libvirt + cleanup (role `libvirt`)
 
-Status: pendente.
+Status: implementado e validado (Tier 1 e Tier 2 verdes).
 
 - XML condicional (ISO/graphics/rendernode opcionais); sem pin de `machine` e
   sem PCI manual; `virt-xml-validate`.
 - Garantir rede `default` ativa; define/undefine limpos.
-- Role `cleanup` idempotente e testada com falha induzida.
+- `block/rescue/always` + `teardown.yml` para undefine idempotente.
+- Molecule Tier 1: guards de fatos, templates condicionais, defaults,
+  teardown idempotente. Tier 2: define/undefine reais com BTRFS sintético.
 
-Gate: XML válido, define/undefine sem resíduo.
+Gate: XML válido, define/undefine sem resíduo. ✅
 
 ### Fase 6 - End-to-end e documentação final
 

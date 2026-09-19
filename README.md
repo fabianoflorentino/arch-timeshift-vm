@@ -4,9 +4,9 @@ Restaura um snapshot do Timeshift/BTRFS do host em uma VM libvirt/KVM
 bootável e descartável, inteiramente no host - sem VirtioFS e sem ISO de
 instalação.
 
-> Status: fases 1-4 implementadas e validadas (preflight, disco, restore e
-> boot). Tier 1 e Tier 2 verdes. Veja [`docs/PLAN.md`](docs/PLAN.md) para o
-> plano por fases e o andamento.
+> Status: fases 1-5 implementadas e validadas (preflight, disco, restore, boot
+> e libvirt). Tier 1 e Tier 2 verdes. Veja [`docs/PLAN.md`](docs/PLAN.md) para
+> o plano por fases e o andamento.
 
 ## Como funciona
 
@@ -74,10 +74,11 @@ flowchart TB
     T --> O
     P --> VM(["VM bootável e descartável"]):::done
 
-    Cleanup["teardown (always)<br/>umount · qemu-nbd -d · troca atômica do vm_disk"]:::danger
+    Cleanup["teardown (always)<br/>umount · qemu-nbd -d · virsh undefine<br/>troca atômica do vm_disk"]:::danger
     H -.->|em qualquer falha| Cleanup
     I -.->|em qualquer falha| Cleanup
     N -.->|em qualquer falha| Cleanup
+    P -.->|em qualquer falha| Cleanup
     Cleanup --> Safe(["host intacto: /etc/fstab<br/>e snapshots nunca tocados"]):::done
 ```
 

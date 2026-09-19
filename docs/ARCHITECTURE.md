@@ -32,8 +32,8 @@ Timeshift / BTRFS snapshot
 | `disk` | criar qcow2, expor via NBD, particionar, formatar, montar | sim |
 | `restore` | `btrfs receive`, fstab da VM, identidade do clone | sim (no disco da VM) |
 | `boot` | semear kernel/initramfs, instalar GRUB UEFI | sim (no disco da VM) |
-| `libvirt` | gerar XML, NVRAM, definir e iniciar o domínio | sim (libvirt) |
-| `disk`/`boot` (teardown) | desmontar, desconectar NBD, remover artefatos parciais | sim |
+| `libvirt` | garantir rede, gerar XML, definir e iniciar o domínio | sim (libvirt) |
+| `libvirt` (teardown) | destruir, undefine, remover NVRAM e XML | sim |
 
 ## Fluxo de variáveis
 
