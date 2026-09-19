@@ -5,7 +5,6 @@ confirm_restore: false
 vm_name: archlinux-timeshift
 vm_memory_mib: 4096
 vm_vcpus: 4
-vm_machine: pc-q35-11.1
 
 # Base directory that owns every VM disk. Destructive paths must live below it.
 vm_images_dir: /data/libvirt/images
@@ -27,10 +26,14 @@ efi_size_mib: 1024
 
 # VM networking
 network_name: default
-mac_address: "52:54:00:93:12:1b"
 
 # Optional: leave the ISO attached for rescue. VM still boots from disk first.
 arch_iso: /data/libvirt/iso/archlinux-x86_64.iso
 
-# Kept identical to the known-working VM.
-spice_rendernode: /dev/dri/by-path/pci-0000:00:02.0-render
+# Libvirt domain options
+libvirt_start: true
+libvirt_attach_iso: true
+libvirt_graphics: spice
+libvirt_gl_enable: false
+libvirt_spice_rendernode: /dev/dri/by-path/pci-0000:00:02.0-render
+libvirt_machine: ""

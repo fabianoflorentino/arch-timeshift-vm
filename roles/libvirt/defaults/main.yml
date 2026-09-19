@@ -1,1 +1,16 @@
 ---
+libvirt_start: true
+
+libvirt_attach_iso: true
+
+libvirt_graphics: spice
+libvirt_gl_enable: false
+libvirt_spice_rendernode: /dev/dri/by-path/pci-0000:00:02.0-render
+
+libvirt_machine: ""
+
+libvirt_undefine_before: true
+
+libvirt_xml_validate: true
+
+libvirt_allow_missing_virsh: false

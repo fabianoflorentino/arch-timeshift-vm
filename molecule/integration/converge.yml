@@ -18,6 +18,9 @@
     # Inputs consumed by the snapshot role, pointed at the sandbox.
     confirm_restore: true
     vm_name: tier2-test
+    vm_memory_mib: 2048
+    vm_vcpus: 2
+    network_name: default
     timeshift_root: auto
     snapshot: latest
     vm_images_dir: "{{ tier2_images }}"
@@ -25,10 +28,16 @@
     vm_disk_size: 2G
     efi_size_mib: 256
     work_dir: "{{ tier2_sandbox }}/work"
+    nvram_dir: "{{ tier2_sandbox }}/nvram"
 
     # The synthetic snapshot has no kernel/bootloader, so Phase 4 only
     # exercises the chroot plumbing here. Production defaults to false.
     boot_allow_missing_grub: true
+
+    # Do not start the synthetic VM (no real kernel); define + undefine only.
+    libvirt_start: false
+    libvirt_attach_iso: false
+    libvirt_graphics: none
 
     snapshot_required_commands:
       - btrfs
@@ -393,6 +402,64 @@
             that:
               - boot_chroot_prepared | default(false) | bool
             fail_msg: "Boot role did not prepare the chroot"
+
+    - name: Exercise the libvirt role with define and undefine
+      when: tier2_uid.stdout | trim == '0'
+      tags:
+        - molecule-idempotence-notest
+      block:
+        - name: Hash the host fstab before libvirt operations
+          ansible.builtin.command:
+            cmd: sha256sum /etc/fstab
+          register: tier2_fstab_pre_libvirt
+          changed_when: false
+
+        - name: Run the libvirt role
+          ansible.builtin.include_role:
+            name: libvirt
+
+        - name: Read the generated domain XML
+          ansible.builtin.slurp:
+            src: "{{ work_dir }}/{{ vm_name }}.xml"
+          register: tier2_domain_xml
+
+        - name: Assert the XML was generated
+          ansible.builtin.assert:
+            that:
+              - tier2_domain_xml.content | b64decode | length > 0
+            fail_msg: "Libvirt domain XML was not generated"
+
+        - name: Assert the XML contains the VM name
+          ansible.builtin.assert:
+            that:
+              - vm_name in (tier2_domain_xml.content | b64decode)
+              - vm_disk in (tier2_domain_xml.content | b64decode)
+              - "'cdrom' not in (tier2_domain_xml.content | b64decode)"
+            fail_msg: "Libvirt domain XML does not contain expected content"
+
+        - name: Run teardown (undefine the domain)
+          ansible.builtin.include_tasks:
+            file: "{{ project_dir }}/roles/libvirt/tasks/teardown.yml"
+
+        - name: Assert the domain was undefined
+          ansible.builtin.command:
+            cmd: virsh dominfo {{ vm_name }}
+          register: tier2_undefine_check
+          failed_when: tier2_undefine_check.rc == 0
+          changed_when: false
+
+        - name: Hash the host fstab after libvirt operations
+          ansible.builtin.command:
+            cmd: sha256sum /etc/fstab
+          register: tier2_fstab_post_libvirt
+          changed_when: false
+
+        - name: Assert host fstab was not modified by libvirt
+          ansible.builtin.assert:
+            that:
+              - tier2_fstab_pre_libvirt.stdout == tier2_fstab_post_libvirt.stdout
+            fail_msg: "Host /etc/fstab was modified by libvirt operations"
+            success_msg: "Host /etc/fstab remains intact after libvirt"
       always:
         - name: Aggressive cleanup of all tier2 mounts and NBD devices
           ansible.builtin.shell: |

@@ -1,0 +1,27 @@
+---
+- name: Stop the VM if running
+  ansible.builtin.command:
+    cmd: virsh destroy {{ vm_name }}
+  changed_when: false
+  failed_when: false
+
+- name: Undefine the domain
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if virsh dominfo {{ vm_name }} >/dev/null 2>&1; then
+      virsh undefine {{ vm_name }} --nvram 2>/dev/null || virsh undefine {{ vm_name }} 2>/dev/null || true
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: Remove the NVRAM file
+  ansible.builtin.file:
+    path: "{{ nvram_dir }}/{{ vm_name }}_VARS.fd"
+    state: absent
+
+- name: Remove the generated XML
+  ansible.builtin.file:
+    path: "{{ work_dir }}/{{ vm_name }}.xml"
+    state: absent

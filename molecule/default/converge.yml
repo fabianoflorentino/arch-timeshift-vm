@@ -359,3 +359,182 @@
           - tier1_boot_restored_root_guard | default(false)
         fail_msg: "Boot role tests failed"
         success_msg: "Boot role Tier 1 tests passed"
+
+    - name: Libvirt role - validate required facts are enforced
+      block:
+        - name: Run libvirt role with empty facts
+          ansible.builtin.include_role:
+            name: libvirt
+          vars:
+            vm_name: ""
+            vm_disk: ""
+            work_dir: ""
+
+        - name: Record a failed validation guard
+          ansible.builtin.set_fact:
+            tier1_libvirt_validation_guard: false
+      rescue:
+        - name: Record a successful validation guard
+          ansible.builtin.set_fact:
+            tier1_libvirt_validation_guard: true
+
+    - name: Libvirt role - validate defaults
+      block:
+        - name: Include the libvirt role defaults
+          ansible.builtin.include_vars:
+            file: "{{ playbook_dir }}/../../roles/libvirt/defaults/main.yml"
+            name: libvirt_defaults
+
+        - name: Assert libvirt role defaults are defined
+          ansible.builtin.assert:
+            that:
+              - libvirt_defaults.libvirt_start is defined
+              - libvirt_defaults.libvirt_attach_iso is defined
+              - libvirt_defaults.libvirt_graphics is defined
+              - libvirt_defaults.libvirt_graphics | length > 0
+              - libvirt_defaults.libvirt_gl_enable is defined
+              - libvirt_defaults.libvirt_machine is defined
+              - libvirt_defaults.libvirt_undefine_before is defined
+              - libvirt_defaults.libvirt_xml_validate is defined
+            fail_msg: "Libvirt role defaults are missing"
+
+    - name: Libvirt role - template renders without ISO
+      block:
+        - name: Seed variables for template rendering
+          ansible.builtin.set_fact:
+            vm_name: tier1-render-test
+            vm_memory_mib: 2048
+            vm_vcpus: 2
+            vm_disk: /tmp/render-test.qcow2
+            network_name: default
+            arch_iso: /tmp/nonexistent.iso
+            ovmf_code: /usr/share/edk2/x64/OVMF_CODE.4m.fd
+            nvram_file: /tmp/render-test_VARS.fd
+            libvirt_attach_iso: false
+            libvirt_graphics: spice
+            libvirt_gl_enable: false
+            libvirt_spice_rendernode: /dev/dri/renderD128
+            libvirt_machine: ""
+
+        - name: Render the domain XML without ISO
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../../roles/libvirt/templates/domain.xml.j2"
+            dest: /tmp/tier1-domain-noiso.xml
+            mode: "0644"
+
+        - name: Read the rendered XML
+          ansible.builtin.slurp:
+            src: /tmp/tier1-domain-noiso.xml
+          register: tier1_xml_noiso
+
+        - name: Assert XML omits CDROM and has disk
+          ansible.builtin.assert:
+            that:
+              - "'cdrom' not in (tier1_xml_noiso.content | b64decode)"
+              - "'device=\"disk\"' in (tier1_xml_noiso.content | b64decode)"
+              - "vm_name in (tier1_xml_noiso.content | b64decode)"
+              - "vm_disk in (tier1_xml_noiso.content | b64decode)"
+              - "'machine=' not in (tier1_xml_noiso.content | b64decode)"
+            fail_msg: "XML without ISO did not render correctly"
+
+    - name: Libvirt role - template renders with ISO
+      block:
+        - name: Seed variables for template rendering with ISO
+          ansible.builtin.set_fact:
+            libvirt_attach_iso: true
+
+        - name: Render the domain XML with ISO
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../../roles/libvirt/templates/domain.xml.j2"
+            dest: /tmp/tier1-domain-iso.xml
+            mode: "0644"
+
+        - name: Read the rendered XML with ISO
+          ansible.builtin.slurp:
+            src: /tmp/tier1-domain-iso.xml
+          register: tier1_xml_iso
+
+        - name: Assert XML includes CDROM
+          ansible.builtin.assert:
+            that:
+              - "'cdrom' in (tier1_xml_iso.content | b64decode)"
+              - "arch_iso in (tier1_xml_iso.content | b64decode)"
+            fail_msg: "XML with ISO did not include CDROM device"
+
+    - name: Libvirt role - template renders headless (no graphics)
+      block:
+        - name: Seed headless graphics
+          ansible.builtin.set_fact:
+            libvirt_graphics: none
+
+        - name: Render the domain XML headless
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../../roles/libvirt/templates/domain.xml.j2"
+            dest: /tmp/tier1-domain-headless.xml
+            mode: "0644"
+
+        - name: Read the headless XML
+          ansible.builtin.slurp:
+            src: /tmp/tier1-domain-headless.xml
+          register: tier1_xml_headless
+
+        - name: Assert headless XML omits graphics and keeps serial output
+          ansible.builtin.assert:
+            that:
+              - "'<graphics' not in (tier1_xml_headless.content | b64decode)"
+              - "'type=\"none\"' not in (tier1_xml_headless.content | b64decode)"
+              - "'<serial type=\"pty\">' in (tier1_xml_headless.content | b64decode)"
+            fail_msg: "Headless XML did not render correctly"
+
+    - name: Libvirt role - template renders with GL acceleration
+      block:
+        - name: Seed GL graphics
+          ansible.builtin.set_fact:
+            libvirt_graphics: spice
+            libvirt_gl_enable: true
+
+        - name: Render the domain XML with GL
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../../roles/libvirt/templates/domain.xml.j2"
+            dest: /tmp/tier1-domain-gl.xml
+            mode: "0644"
+
+        - name: Read the GL XML
+          ansible.builtin.slurp:
+            src: /tmp/tier1-domain-gl.xml
+          register: tier1_xml_gl
+
+        - name: Assert GL XML includes rendernode
+          ansible.builtin.assert:
+            that:
+              - "'gl enable=\"yes\"' in (tier1_xml_gl.content | b64decode)"
+              - "'rendernode' in (tier1_xml_gl.content | b64decode)"
+            fail_msg: "GL XML did not include acceleration"
+
+    - name: Libvirt role - teardown is idempotent (no-op)
+      block:
+        - name: Seed teardown variables (no domain, no NVRAM)
+          ansible.builtin.set_fact:
+            vm_name: tier1-teardown-nonexistent
+            nvram_dir: /tmp/nonexistent-nvram
+            work_dir: /tmp/nonexistent-workdir
+
+        - name: Run teardown (should be a no-op)
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../../roles/libvirt/tasks/teardown.yml"
+
+        - name: Record successful teardown idempotency
+          ansible.builtin.set_fact:
+            tier1_libvirt_teardown_idempotent: true
+      rescue:
+        - name: Record failed teardown idempotency
+          ansible.builtin.set_fact:
+            tier1_libvirt_teardown_idempotent: false
+
+    - name: Assert libvirt role tests passed
+      ansible.builtin.assert:
+        that:
+          - tier1_libvirt_validation_guard | default(false)
+          - tier1_libvirt_teardown_idempotent | default(false)
+        fail_msg: "Libvirt role tests failed"
+        success_msg: "Libvirt role Tier 1 tests passed"

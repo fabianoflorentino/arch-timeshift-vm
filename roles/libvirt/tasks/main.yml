@@ -1,78 +1,143 @@
 ---
-- name: Create NVRAM directory
-  ansible.builtin.file:
-    path: "{{ nvram_dir }}"
-    state: directory
-    mode: "0755"
-
-- name: Find OVMF code image
-  ansible.builtin.shell: |
-    set -euo pipefail
-    find /usr/share/edk2/x64 -maxdepth 1 -type f -name 'OVMF_CODE.4m.fd' -print -quit
-  args:
-    executable: /bin/bash
-  register: ovmf_code_find
-  changed_when: false
-
-- name: Find OVMF vars template
-  ansible.builtin.shell: |
-    set -euo pipefail
-    find /usr/share/edk2/x64 -maxdepth 1 -type f -name 'OVMF_VARS.4m.fd' -print -quit
-  args:
-    executable: /bin/bash
-  register: ovmf_vars_find
-  changed_when: false
-
-- name: Set OVMF paths
-  ansible.builtin.set_fact:
-    ovmf_code: "{{ ovmf_code_find.stdout | trim }}"
-    ovmf_vars_template: "{{ ovmf_vars_find.stdout | trim }}"
-    nvram_file: "{{ nvram_dir }}/{{ vm_name }}_VARS.fd"
-
-- name: Validate OVMF paths
+- name: Validate required facts from upstream roles
   ansible.builtin.assert:
     that:
-      - ovmf_code | length > 0
-      - ovmf_vars_template | length > 0
-    fail_msg: "OVMF 4m firmware files were not found."
+      - vm_name is defined and vm_name | length > 0
+      - vm_disk is defined and vm_disk | length > 0
+      - work_dir is defined and work_dir | length > 0
+      - vm_memory_mib is defined
+      - vm_vcpus is defined
+      - network_name is defined and network_name | length > 0
+    fail_msg: >-
+      Libvirt role requires facts from upstream roles:
+      vm_name, vm_disk, work_dir, vm_memory_mib, vm_vcpus, network_name.
+    quiet: true
 
-- name: Create per-VM NVRAM
-  ansible.builtin.copy:
-    src: "{{ ovmf_vars_template }}"
-    dest: "{{ nvram_file }}"
-    remote_src: true
-    mode: "0644"
+- name: Define and start the libvirt domain
+  block:
+    - name: Ensure the NVRAM directory exists
+      ansible.builtin.file:
+        path: "{{ nvram_dir }}"
+        state: directory
+        mode: "0755"
 
-- name: Generate libvirt XML
-  ansible.builtin.template:
-    src: domain.xml.j2
-    dest: "{{ work_dir }}/{{ vm_name }}.xml"
-    mode: "0644"
+    - name: Find the OVMF code image
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find /usr/share/edk2/x64 -maxdepth 1 -type f -name 'OVMF_CODE.4m.fd' -print -quit
+      args:
+        executable: /bin/bash
+      register: libvirt_ovmf_code_find
+      changed_when: false
 
-- name: Validate libvirt XML
-  ansible.builtin.command:
-    argv:
-      - virsh
-      - define
-      - "{{ work_dir }}/{{ vm_name }}.xml"
-  register: virsh_define
-  changed_when: true
+    - name: Find the OVMF vars template
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find /usr/share/edk2/x64 -maxdepth 1 -type f -name 'OVMF_VARS.4m.fd' -print -quit
+      args:
+        executable: /bin/bash
+      register: libvirt_ovmf_vars_find
+      changed_when: false
 
-- name: Start restored VM
-  ansible.builtin.command: "virsh start {{ vm_name }}"
-  register: vm_start
-  changed_when: true
+    - name: Set OVMF and NVRAM paths
+      ansible.builtin.set_fact:
+        ovmf_code: "{{ libvirt_ovmf_code_find.stdout | trim }}"
+        ovmf_vars_template: "{{ libvirt_ovmf_vars_find.stdout | trim }}"
+        nvram_file: "{{ nvram_dir }}/{{ vm_name }}_VARS.fd"
 
-- name: Show VM status
-  ansible.builtin.command: "virsh domstate {{ vm_name }}"
-  register: vm_state
-  changed_when: false
+    - name: Validate OVMF firmware files were found
+      ansible.builtin.assert:
+        that:
+          - ovmf_code | length > 0
+          - ovmf_vars_template | length > 0
+        fail_msg: "OVMF 4m firmware files were not found under /usr/share/edk2/x64."
+        quiet: true
 
-- name: Show result
-  ansible.builtin.debug:
-    msg:
-      - "VM: {{ vm_name }}"
-      - "Snapshot: {{ resolved_snapshot }}"
-      - "State: {{ vm_state.stdout }}"
-      - "Disk: {{ vm_disk }}"
-      - "NVRAM: {{ nvram_file }}"
+    - name: Create per-VM NVRAM copy
+      ansible.builtin.copy:
+        src: "{{ ovmf_vars_template }}"
+        dest: "{{ nvram_file }}"
+        remote_src: true
+        mode: "0644"
+        force: true
+
+    - name: Ensure the default network is active
+      ansible.builtin.command:
+        cmd: virsh net-start {{ network_name }}
+      register: libvirt_net_start
+      changed_when: "'started' in libvirt_net_start.stdout"
+      failed_when: false
+
+    - name: Undefine any pre-existing domain with the same name
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if virsh dominfo {{ vm_name }} >/dev/null 2>&1; then
+          virsh destroy {{ vm_name }} 2>/dev/null || true
+          virsh undefine {{ vm_name }} --nvram 2>/dev/null || virsh undefine {{ vm_name }} 2>/dev/null || true
+        fi
+      args:
+        executable: /bin/bash
+      register: libvirt_undefine
+      changed_when: "'undefined' in (libvirt_undefine.stdout + libvirt_undefine.stderr)"
+      when: libvirt_undefine_before | bool
+
+    - name: Generate the libvirt domain XML
+      ansible.builtin.template:
+        src: domain.xml.j2
+        dest: "{{ work_dir }}/{{ vm_name }}.xml"
+        mode: "0644"
+
+    - name: Validate the generated XML with virt-xml-validate
+      ansible.builtin.command:
+        cmd: virt-xml-validate {{ work_dir }}/{{ vm_name }}.xml
+      register: libvirt_xml_check
+      changed_when: false
+      failed_when: false
+      when: libvirt_xml_validate | bool
+
+    - name: Warn if XML validation is not available or failed
+      ansible.builtin.debug:
+        msg: >-
+          virt-xml-validate not available or failed (rc={{ libvirt_xml_check.rc | default('n/a') }});
+          proceeding with virsh define as the authoritative validator.
+      when:
+        - libvirt_xml_validate | bool
+        - libvirt_xml_check.rc | default(1) != 0
+
+    - name: Define the domain
+      ansible.builtin.command:
+        cmd: virsh define {{ work_dir }}/{{ vm_name }}.xml
+      register: libvirt_define
+      changed_when: true
+
+    - name: Start the VM
+      ansible.builtin.command:
+        cmd: virsh start {{ vm_name }}
+      register: libvirt_vm_start
+      changed_when: true
+      when: libvirt_start | bool
+
+    - name: Show the VM state
+      ansible.builtin.command:
+        cmd: virsh domstate {{ vm_name }}
+      register: libvirt_vm_state
+      changed_when: false
+
+    - name: Show the result
+      ansible.builtin.debug:
+        msg:
+          - "VM: {{ vm_name }}"
+          - "Snapshot: {{ resolved_snapshot | default('n/a') }}"
+          - "State: {{ libvirt_vm_state.stdout }}"
+          - "Disk: {{ vm_disk }}"
+          - "NVRAM: {{ nvram_file }}"
+          - "Network: {{ network_name }}"
+
+  rescue:
+    - name: Teardown on failure
+      ansible.builtin.include_tasks:
+        file: teardown.yml
+
+    - name: Re-raise the error
+      ansible.builtin.fail:
+        msg: "Libvirt domain setup failed; cleaned up domain and NVRAM."
