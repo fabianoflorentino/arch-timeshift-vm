@@ -1,16 +1,16 @@
 ---
 - name: Stop the VM if running
   ansible.builtin.command:
-    cmd: virsh -c {{ libvirt_uri }} destroy {{ vm_name }}
+    cmd: virsh -c {{ libvirt_uri | default('qemu:///system') }} destroy {{ vm_name }}
   changed_when: false
   failed_when: false
 
 - name: Undefine the domain
   ansible.builtin.shell: |
     set -euo pipefail
-    if virsh -c {{ libvirt_uri }} dominfo {{ vm_name }} >/dev/null 2>&1; then
-      virsh -c {{ libvirt_uri }} undefine {{ vm_name }} --nvram 2>/dev/null \
-        || virsh -c {{ libvirt_uri }} undefine {{ vm_name }} 2>/dev/null \
+    if virsh -c {{ libvirt_uri | default('qemu:///system') }} dominfo {{ vm_name }} >/dev/null 2>&1; then
+      virsh -c {{ libvirt_uri | default('qemu:///system') }} undefine {{ vm_name }} --nvram 2>/dev/null \
+        || virsh -c {{ libvirt_uri | default('qemu:///system') }} undefine {{ vm_name }} 2>/dev/null \
         || true
     fi
   args:

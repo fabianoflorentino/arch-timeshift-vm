@@ -55,9 +55,9 @@
         - "{{ fixture_snapshot_dir }}"
         - "{{ fixture_snapshot_dir }}/@"
         - "{{ fixture_snapshot_dir }}/@home"
-        - "{{ fixture_snapshot_dir }}/etc"
-        - "{{ fixture_snapshot_dir }}/usr/bin"
-        - "{{ fixture_snapshot_dir }}/usr/lib/modules/fixture"
+        - "{{ fixture_snapshot_dir }}/@/etc"
+        - "{{ fixture_snapshot_dir }}/@/usr/bin"
+        - "{{ fixture_snapshot_dir }}/@/usr/lib/modules/fixture"
 
     - name: Write the fixture snapshot metadata
       ansible.builtin.copy:
@@ -75,10 +75,10 @@
         dest: "{{ item }}"
         mode: "0755"
       loop:
-        - "{{ fixture_snapshot_dir }}/etc/fstab"
-        - "{{ fixture_snapshot_dir }}/usr/bin/grub-install"
-        - "{{ fixture_snapshot_dir }}/usr/bin/mkinitcpio"
-        - "{{ fixture_snapshot_dir }}/usr/lib/modules/fixture/vmlinuz"
+        - "{{ fixture_snapshot_dir }}/@/etc/fstab"
+        - "{{ fixture_snapshot_dir }}/@/usr/bin/grub-install"
+        - "{{ fixture_snapshot_dir }}/@/usr/bin/mkinitcpio"
+        - "{{ fixture_snapshot_dir }}/@/usr/lib/modules/fixture/vmlinuz"
 
     - name: Positive - snapshot_source resolves and validates a bootable fixture
       block:
