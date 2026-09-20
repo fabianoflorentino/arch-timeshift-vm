@@ -7,3 +7,9 @@ boot_allow_missing_grub: false
 # Restored root mountpoint published by the restore role. Falls back to the
 # conventional work_dir/mnt-root layout when vm_mount_root is not provided.
 boot_restored_root: "{{ vm_mount_root | default(work_dir + '/mnt') }}-root"
+
+# Optional E2E-only guest health evidence. The marker is installed in the
+# restored clone, never in the source snapshot.
+boot_guest_evidence_enabled: false
+boot_guest_evidence_marker: /var/lib/arch-timeshift-vm/e2e-boot-ok
+boot_guest_evidence_signature: ARCH_TIMESHIFT_VM_E2E_HEALTHY

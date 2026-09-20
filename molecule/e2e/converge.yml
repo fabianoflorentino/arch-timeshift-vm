@@ -33,6 +33,7 @@
     snapshot_stage_root: "{{ e2e_stage_root }}"
     snapshot_stage_name: "{{ e2e_snapshot_name }}"
     snapshot_source_require_readonly_subvolume: false
+    boot_guest_evidence_enabled: true
 
   pre_tasks:
     - name: Require an explicit E2E snapshot path

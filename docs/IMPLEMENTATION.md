@@ -207,7 +207,8 @@ Os documentos finais devem cobrir:
 4. Implementar `e2e_preflight`. ✅
 5. Integrar os fatos aos cenários Molecule. ✅
 6. Executar `make e2e` com criação de snapshot desligada. ✅ (2026-09-20)
-7. Aperfeiçoar a verificação de boot do guest. ⏳ aberto (não bloqueia o gate)
+7. Aperfeiçoar a verificação de boot do guest. ✅ assinatura systemd no
+   console serial; QEMU guest agent/SSH permanece opcional
 8. Fechar documentação, changelog e gate da Fase 6. ✅
 
 ## Critério de conclusão

@@ -158,6 +158,71 @@
       changed_when: true
       when: boot_install_grub | bool
 
+    - name: Install guest health evidence directory
+      ansible.builtin.file:
+        path: "{{ boot_restored_root }}/{{ boot_guest_evidence_marker | dirname }}"
+        state: directory
+        mode: "0755"
+      when: boot_guest_evidence_enabled | bool
+
+    - name: Ensure guest health evidence directories exist
+      ansible.builtin.file:
+        path: "{{ boot_restored_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - usr/local/libexec
+        - etc/systemd/system/multi-user.target.wants
+      when: boot_guest_evidence_enabled | bool
+
+    - name: Install guest health evidence script
+      ansible.builtin.copy:
+        dest: "{{ boot_restored_root }}/usr/local/libexec/arch-timeshift-vm-e2e-evidence"
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          set -eu
+          marker="{{ boot_guest_evidence_marker }}"
+          signature="{{ boot_guest_evidence_signature }}"
+          mkdir -p "$(dirname "$marker")"
+          printf '%s\n' "$signature" > "$marker"
+          printf '%s host=%s\n' "$signature" "$(hostname)" > /dev/ttyS0 2>/dev/null || true
+          i=0
+          while [ "$i" -lt 30 ]; do
+            printf '%s host=%s\n' "$signature" "$(hostname)" > /dev/ttyS0 2>/dev/null || true
+            i=$((i + 1))
+            sleep 2
+          done
+      when: boot_guest_evidence_enabled | bool
+
+    - name: Install guest health evidence service
+      ansible.builtin.copy:
+        dest: "{{ boot_restored_root }}/etc/systemd/system/arch-timeshift-vm-e2e-evidence.service"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=arch-timeshift-vm E2E guest health evidence
+          After=local-fs.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/libexec/arch-timeshift-vm-e2e-evidence
+          RemainAfterExit=no
+
+          [Install]
+          WantedBy=multi-user.target
+      when: boot_guest_evidence_enabled | bool
+
+    - name: Enable guest health evidence service
+      ansible.builtin.file:
+        src: /etc/systemd/system/arch-timeshift-vm-e2e-evidence.service
+        dest: >-
+          {{ boot_restored_root }}/etc/systemd/system/multi-user.target.wants/
+          arch-timeshift-vm-e2e-evidence.service
+        state: link
+        force: true
+      when: boot_guest_evidence_enabled | bool
+
     - name: Record that the chroot was prepared
       ansible.builtin.set_fact:
         boot_chroot_prepared: true

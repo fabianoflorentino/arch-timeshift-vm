@@ -42,3 +42,25 @@
           - vm_disk in e2e_block_devices.stdout
         fail_msg: "E2E domain is running without the restored disk {{ vm_disk }}"
         quiet: true
+
+    - name: Read the guest serial console for health evidence
+      ansible.builtin.shell: |
+        set +e
+        timeout 20s virsh -c "{{ libvirt_uri }}" console "{{ e2e_vm_name }}" --force
+        exit 0
+      args:
+        executable: /bin/bash
+      register: e2e_guest_console
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: "'ARCH_TIMESHIFT_VM_E2E_HEALTHY' in e2e_guest_console.stdout"
+
+    - name: Assert the guest reported healthy boot evidence
+      ansible.builtin.assert:
+        that:
+          - "'ARCH_TIMESHIFT_VM_E2E_HEALTHY' in e2e_guest_console.stdout"
+        fail_msg: >-
+          The VM reached running state, but the guest did not report the
+          expected boot-health signature on its serial console.
+        quiet: true

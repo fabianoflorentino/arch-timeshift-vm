@@ -156,9 +156,10 @@ Plano detalhado: [`docs/IMPLEMENTATION.md`](IMPLEMENTATION.md).
 
 Gate: `make e2e` verde. ✅
 
-Melhoria aberta (não bloqueia o gate): a verificação do guest ainda confia em
-`virsh domstate`; um sinal do guest (console serial, agente QEMU ou SSH)
-pode ser adicionado quando o snapshot de referência oferecer suporte.
+Melhoria aberta (não bloqueia o gate): a evidência atual usa um serviço
+systemd injetado somente no clone E2E e uma assinatura no console serial.
+Uma verificação adicional por QEMU guest agent ou SSH pode ser adicionada
+quando o snapshot de referência oferecer suporte.
 
 ## Bloqueadores descobertos no host de referência
 
