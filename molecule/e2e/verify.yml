@@ -142,14 +142,18 @@
           ansible.builtin.slurp:
             src: "{{ e2e_work_dir }}/guest-evidence{{ e2e_guest_evidence_marker }}"
           register: e2e_guest_evidence
+          failed_when: false
 
         - name: Assert the guest reported healthy boot evidence
           ansible.builtin.assert:
             that:
-              - e2e_guest_evidence.content | b64decode | trim == e2e_guest_evidence_signature
+              - e2e_guest_evidence.failed | default(false) | bool == false
+              - e2e_guest_evidence.content | default('') | b64decode | trim == e2e_guest_evidence_signature
             fail_msg: >-
-              The VM booted, but the expected guest health marker was not
-              written with the expected signature.
+              The VM stopped, but the expected guest health marker was not
+              written with the expected signature. Service:
+              {{ (e2e_work_dir + '/guest-evidence/etc/systemd/system/'
+                  'arch-timeshift-vm-e2e-evidence.service') }}.
             quiet: true
       always:
         - name: Unmount the guest evidence filesystem

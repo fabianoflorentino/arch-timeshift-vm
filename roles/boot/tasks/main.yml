@@ -172,7 +172,7 @@
         mode: "0755"
       loop:
         - usr/local/libexec
-        - etc/systemd/system/multi-user.target.wants
+        - etc/systemd/system/basic.target.wants
       when: boot_guest_evidence_enabled | bool
 
     - name: Install guest health evidence script
@@ -202,8 +202,9 @@
         content: |
           [Unit]
           Description=arch-timeshift-vm E2E guest health evidence
+          DefaultDependencies=no
           After=local-fs.target
-          Before=multi-user.target
+          Before=basic.target shutdown.target
 
           [Service]
           Type=oneshot
@@ -211,14 +212,14 @@
           RemainAfterExit=yes
 
           [Install]
-          WantedBy=multi-user.target
+          WantedBy=basic.target
       when: boot_guest_evidence_enabled | bool
 
     - name: Enable guest health evidence service
       ansible.builtin.file:
         src: /etc/systemd/system/arch-timeshift-vm-e2e-evidence.service
         dest: >-
-          {{ boot_restored_root }}/etc/systemd/system/multi-user.target.wants/
+          {{ boot_restored_root }}/etc/systemd/system/basic.target.wants/
           arch-timeshift-vm-e2e-evidence.service
         state: link
         force: true
