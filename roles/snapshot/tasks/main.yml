@@ -201,15 +201,15 @@
       changed_when: false
       failed_when: false
 
-    - name: Assert @ and @home are subvolumes and @ is read-only
+    - name: Assert @ and @home are subvolumes and @ is protected read-only
       ansible.builtin.assert:
         that:
           - snapshot_root_check.rc == 0
           - snapshot_home_check.rc == 0
           - "'ro=true' in (snapshot_root_ro.stdout | default('') | replace(' ', ''))"
         fail_msg: >-
-          Snapshot {{ resolved_snapshot }} is not a valid Timeshift BTRFS
-          snapshot: @ and @home must be subvolumes and @ must be read-only.
+          Snapshot {{ resolved_snapshot }} is not a sendable BTRFS snapshot:
+          @ and @home must be subvolumes and @ must have ro=true.
         quiet: true
 
 - name: Canonicalize the VM images directory
