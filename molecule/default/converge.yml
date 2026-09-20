@@ -55,6 +55,9 @@
         - "{{ fixture_snapshot_dir }}"
         - "{{ fixture_snapshot_dir }}/@"
         - "{{ fixture_snapshot_dir }}/@home"
+        - "{{ fixture_snapshot_dir }}/etc"
+        - "{{ fixture_snapshot_dir }}/usr/bin"
+        - "{{ fixture_snapshot_dir }}/usr/lib/modules/fixture"
 
     - name: Write the fixture snapshot metadata
       ansible.builtin.copy:
@@ -65,6 +68,84 @@
           }
         dest: "{{ fixture_snapshot_dir }}/info.json"
         mode: "0644"
+
+    - name: Write the fixture boot markers
+      ansible.builtin.copy:
+        content: "fixture\n"
+        dest: "{{ item }}"
+        mode: "0755"
+      loop:
+        - "{{ fixture_snapshot_dir }}/etc/fstab"
+        - "{{ fixture_snapshot_dir }}/usr/bin/grub-install"
+        - "{{ fixture_snapshot_dir }}/usr/bin/mkinitcpio"
+        - "{{ fixture_snapshot_dir }}/usr/lib/modules/fixture/vmlinuz"
+
+    - name: Positive - snapshot_source resolves and validates a bootable fixture
+      block:
+        - name: Run the snapshot_source role
+          ansible.builtin.include_role:
+            name: snapshot_source
+          vars:
+            snapshot_source_root: "{{ fixture_snapshots }}"
+            snapshot_source_name: latest
+            snapshot_source_validate_btrfs: false
+            snapshot_source_require_boot_artifacts: true
+
+        - name: Assert the snapshot_source contract
+          ansible.builtin.assert:
+            that:
+              - e2e_snapshot_name == fixture_snapshot
+              - e2e_snapshot_dir == fixture_snapshot_dir
+              - e2e_snapshot_capabilities.has_kernel | bool
+              - e2e_snapshot_capabilities.has_grub_install | bool
+              - e2e_snapshot_capabilities.has_mkinitcpio | bool
+              - e2e_snapshot_capabilities.bootable_candidate | bool
+            fail_msg: "snapshot_source did not publish the expected contract"
+
+    - name: Negative - snapshot creation requires explicit confirmation
+      block:
+        - name: Run snapshot_source without creation confirmation
+          ansible.builtin.include_role:
+            name: snapshot_source
+          vars:
+            snapshot_source_create: true
+            snapshot_source_create_confirm: false
+
+        - name: Record a failed snapshot creation guard
+          ansible.builtin.set_fact:
+            tier1_snapshot_source_create_guard: false
+      rescue:
+        - name: Record a successful snapshot creation guard
+          ansible.builtin.set_fact:
+            tier1_snapshot_source_create_guard: true
+
+    - name: Assert snapshot creation guard passed
+      ansible.builtin.assert:
+        that:
+          - tier1_snapshot_source_create_guard | bool
+        fail_msg: "snapshot_source allowed unconfirmed snapshot creation"
+
+    - name: Positive - E2E preflight publishes host capability facts
+      block:
+        - name: Run E2E preflight with host-dependent checks disabled
+          ansible.builtin.include_role:
+            name: e2e_preflight
+          vars:
+            e2e_preflight_required_commands: []
+            e2e_preflight_require_kvm: false
+            e2e_preflight_require_libvirt_network: false
+            e2e_preflight_require_ovmf: false
+            e2e_preflight_images_dir: "{{ fixture_root }}"
+            e2e_preflight_min_free_bytes: 0
+
+        - name: Assert the E2E preflight contract
+          ansible.builtin.assert:
+            that:
+              - e2e_host_capabilities.kvm is false
+              - e2e_host_capabilities.libvirt_network is false
+              - e2e_host_capabilities.ovmf is false
+              - e2e_host_capabilities.free_bytes | int >= 0
+            fail_msg: "E2E preflight did not publish the expected contract"
 
     - name: Positive - the snapshot role resolves and validates the fixture
       block:
