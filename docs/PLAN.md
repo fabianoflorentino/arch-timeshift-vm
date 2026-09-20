@@ -139,13 +139,26 @@ Gate: XML válido, define/undefine sem resíduo. ✅
 
 ### Fase 6 - End-to-end e documentação final
 
-Status: pendente.
+Status: concluído. `make e2e` validado em 2026-09-20 contra o snapshot real
+`2026-09-20_14-00-00` (Tier 1/2/3 verdes).
 
-- Run completo até VM bootável (KVM aninhado) + verificação após boot.
-- `README`, `ARCHITECTURE`, `USAGE`, `SAFETY`, `TROUBLESHOOTING`, `CHANGELOG`,
-  `CONTRIBUTING`, `LICENSE`.
+- Tier 3 (`molecule/e2e`): staging BTRFS read-only descartável
+  (`snapshot_stage`), pipeline completo de restore/boot, `virsh define/start`
+  com `qemu:///system`, verificação de `domstate=running` e disco restaurado
+  anexado, cleanup com zero resíduo.
+- Roles opt-in de preparação: `snapshot_source` (valida/cria) e
+  `e2e_preflight` (pré-requisitos do host), expostos por
+  `make prepare-e2e`.
+- Documentos finais criados: `README`, `ARCHITECTURE`, `USAGE`, `SAFETY`,
+  `TROUBLESHOOTING`, `IMPLEMENTATION`, `CHANGELOG`, `CONTRIBUTING`, `LICENSE`.
 
-Gate: `make e2e` verde.
+Plano detalhado: [`docs/IMPLEMENTATION.md`](IMPLEMENTATION.md).
+
+Gate: `make e2e` verde. ✅
+
+Melhoria aberta (não bloqueia o gate): a verificação do guest ainda confia em
+`virsh domstate`; um sinal do guest (console serial, agente QEMU ou SSH)
+pode ser adicionado quando o snapshot de referência oferecer suporte.
 
 ## Bloqueadores descobertos no host de referência
 

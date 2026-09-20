@@ -4,9 +4,9 @@ Restaura um snapshot do Timeshift/BTRFS do host em uma VM libvirt/KVM
 bootável e descartável, inteiramente no host - sem VirtioFS e sem ISO de
 instalação.
 
-> Status: fases 1-5 implementadas e validadas (preflight, disco, restore, boot
-> e libvirt). Tier 1 e Tier 2 verdes. Veja [`docs/PLAN.md`](docs/PLAN.md) para
-> o plano por fases e o andamento.
+> Status: fases 1-6 implementadas e validadas. Tier 1, Tier 2 e Tier 3 (boot
+> real com KVM aninhado) verdes. Veja [`docs/PLAN.md`](docs/PLAN.md) para o
+> plano por fases, o andamento e as melhorias abertas.
 
 ## Como funciona
 
@@ -30,7 +30,7 @@ flowchart TB
         Gate -- "não, padrão seguro" --> Abort(["Aborta: nada é tocado"]):::danger
         Gate -- "sim" --> A["findmnt descobre o topo BTRFS<br/>e timeshift-btrfs/snapshots<br/>(timeshift_root: auto)"]:::ro
         A --> B["resolve o snapshot<br/>@ + @home + info.json"]:::ro
-        B --> C["valida subvolumes e @ read-only"]:::ro
+        B --> C["valida subvolumes e proteção ro de @"]:::ro
         C --> D{"vm_disk dentro de vm_images_dir<br/>e espaço livre suficiente?"}:::gate
         D -- "não" --> Abort
         D -- "sim" --> E["publica fatos:<br/>resolved_snapshot, snapshot_root,<br/>snapshot_home, vm_disk_real"]:::ro
@@ -113,6 +113,54 @@ make test    # Molecule Tier 1 (Docker, sem privilégio)
 make test-integration   # Molecule Tier 2 (BTRFS sintético; pede sudo)
 ```
 
+O Tier 3 exige um snapshot Timeshift real contendo um sistema Arch bootável.
+Ele é deliberadamente opt-in e não possui um caminho padrão:
+
+```bash
+E2E_TIMESHIFT_ROOT=/mnt/btrfs-top/timeshift-btrfs/snapshots \
+  make e2e
+```
+
+O comando cria uma cópia BTRFS read-only descartável em
+`/var/tmp/arch-timeshift-vm-stage`, usa essa cópia como fonte, cria a imagem
+em `/var/tmp/arch-timeshift-vm-e2e`, inicia a VM com
+KVM/UEFI, verifica que o domínio chega a `running` e executa cleanup ao final.
+Para usar outro snapshot, domínio ou diretório temporário:
+`E2E_SNAPSHOT`, `E2E_VM_NAME`, `E2E_VM_DISK_SIZE`, `E2E_IMAGES_DIR` e
+`E2E_WORK_DIR`.
+
+Antes do E2E, a fonte pode ser validada sem criar ou modificar snapshots:
+
+```bash
+SNAPSHOT_SOURCE_ROOT=/mnt/btrfs-top/timeshift-btrfs/snapshots \
+  make prepare-e2e
+```
+
+Esse comando também valida os pré-requisitos do host: KVM, ferramentas,
+firmware OVMF, rede libvirt e espaço no diretório de imagens. A validação não
+cria diretórios, imagens, domínios ou snapshots.
+
+O preflight consulta explicitamente o libvirt do sistema
+(`qemu:///system`), que é o contexto usado pelo E2E. Por padrão, uma rede
+ausente ou parada apenas causa falha com instruções; para permitir que o
+playbook defina, habilite e inicie a rede padrão encontrada em
+`/etc/libvirt/qemu/networks`, use:
+
+```bash
+sudo "$(pwd)/.venv/bin/ansible-playbook" playbooks/prepare-e2e.yml \
+  -e snapshot_source_root=/mnt/btrfs-top/timeshift-btrfs/snapshots \
+  -e e2e_preflight_prepare_network=true
+```
+
+A criação de um novo snapshot é separada e exige duas confirmações:
+
+```bash
+sudo "$(pwd)/.venv/bin/ansible-playbook" playbooks/prepare-e2e.yml \
+  -e snapshot_source_create=true \
+  -e snapshot_source_create_confirm=true \
+  -e snapshot_source_root=/mnt/btrfs-top/timeshift-btrfs/snapshots
+```
+
 ## Uso
 
 Revise `group_vars/all.yml`. O playbook é destrutivo para o disco da VM
@@ -143,10 +191,15 @@ sudo ansible-playbook playbooks/restore.yml \
 - `make test-integration` - Molecule Tier 2: detecção BTRFS e validação de
   snapshot em sandbox com BTRFS sintético (loopback); **requer root** (o
   alvo chama `sudo -E`).
-- `make e2e` - Tier 3 (na Fase 6): boot real da VM com KVM aninhado.
+- `make e2e` - Tier 3: boot real da VM com KVM aninhado; requer
+  `E2E_TIMESHIFT_ROOT` explícito.
+- `playbooks/prepare-e2e.yml` - valida a fonte Timeshift e as capacidades de
+  boot; criação de snapshot é opt-in e confirmada explicitamente.
 
-Nenhum teste toca snapshots reais nem imagens reais. Veja
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Nenhum teste toca snapshots reais nem imagens reais: o E2E usa os snapshots
+reais apenas como fonte, via cópia de staging read-only em `/var/tmp`. Veja
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) e
+[`docs/USAGE.md`](docs/USAGE.md).
 
 ## Segurança
 
@@ -164,15 +217,19 @@ Nenhum teste toca snapshots reais nem imagens reais. Veja
 ansible.cfg
 requirements.yml / requirements-dev.txt
 Makefile
-docs/{PLAN,ARCHITECTURE}.md
+LICENSE
+CHANGELOG.md / CONTRIBUTING.md
+docs/{PLAN,ARCHITECTURE,USAGE,SAFETY,TROUBLESHOOTING,IMPLEMENTATION}.md
 group_vars/all.yml
 inventory/localhost.yml
 playbooks/restore.yml
+playbooks/prepare-e2e.yml
 roles/{snapshot,disk,restore,boot,libvirt}/
-molecule/{default,integration}/
+roles/{snapshot_source,snapshot_stage,e2e_preflight,e2e_cleanup}/
+molecule/{default,integration,e2e}/
 scripts/
 ```
 
 ## Licença
 
-MIT (a definir na Fase 6).
+MIT. Consulte [`LICENSE`](LICENSE).
