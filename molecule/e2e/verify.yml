@@ -91,12 +91,14 @@
         - name: Find a free NBD device
           ansible.builtin.shell: |
             set -euo pipefail
-            for nbd in /dev/nbd0 /dev/nbd1 /dev/nbd2 /dev/nbd3; do
-              if [ "$(blockdev --getsize64 "$nbd" 2>/dev/null || echo 0)" = "0" ]; then
+            for nbd in /dev/nbd{0..15}; do
+              if [ -b "$nbd" ] &&
+                 [ "$(cat "/sys/class/block/${nbd##*/}/size" 2>/dev/null || echo 1)" = "0" ]; then
                 echo "$nbd"
                 exit 0
               fi
             done
+            echo "No free NBD device found in /dev/nbd0 through /dev/nbd15" >&2
             exit 1
           args:
             executable: /bin/bash
