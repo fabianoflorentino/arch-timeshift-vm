@@ -1,5 +1,6 @@
 ---
 libvirt_start: true
+libvirt_uri: qemu:///system
 
 libvirt_attach_iso: true
 

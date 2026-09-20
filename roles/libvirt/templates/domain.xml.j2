@@ -110,10 +110,7 @@
       <model type="vga" heads="1" primary="yes"/>
     </video>
 {% else %}
-    {# Headless mode: omit <graphics> entirely; libvirt rejects type="none". #}
-    <serial type="pty">
-      <target port="0"/>
-    </serial>
+    {# Headless mode: omit graphics; the shared serial/console remains available. #}
 {% endif %}
 
     <memballoon model="virtio"/>

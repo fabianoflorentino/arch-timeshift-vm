@@ -63,7 +63,7 @@
 
     - name: Ensure the default network is active
       ansible.builtin.command:
-        cmd: virsh net-start {{ network_name }}
+        cmd: virsh -c {{ libvirt_uri }} net-start {{ network_name }}
       register: libvirt_net_start
       changed_when: "'started' in libvirt_net_start.stdout"
       failed_when: false
@@ -71,9 +71,11 @@
     - name: Undefine any pre-existing domain with the same name
       ansible.builtin.shell: |
         set -euo pipefail
-        if virsh dominfo {{ vm_name }} >/dev/null 2>&1; then
-          virsh destroy {{ vm_name }} 2>/dev/null || true
-          virsh undefine {{ vm_name }} --nvram 2>/dev/null || virsh undefine {{ vm_name }} 2>/dev/null || true
+        if virsh -c {{ libvirt_uri }} dominfo {{ vm_name }} >/dev/null 2>&1; then
+          virsh -c {{ libvirt_uri }} destroy {{ vm_name }} 2>/dev/null || true
+          virsh -c {{ libvirt_uri }} undefine {{ vm_name }} --nvram 2>/dev/null \
+            || virsh -c {{ libvirt_uri }} undefine {{ vm_name }} 2>/dev/null \
+            || true
         fi
       args:
         executable: /bin/bash
@@ -106,20 +108,20 @@
 
     - name: Define the domain
       ansible.builtin.command:
-        cmd: virsh define {{ work_dir }}/{{ vm_name }}.xml
+        cmd: virsh -c {{ libvirt_uri }} define {{ work_dir }}/{{ vm_name }}.xml
       register: libvirt_define
       changed_when: true
 
     - name: Start the VM
       ansible.builtin.command:
-        cmd: virsh start {{ vm_name }}
+        cmd: virsh -c {{ libvirt_uri }} start {{ vm_name }}
       register: libvirt_vm_start
       changed_when: true
       when: libvirt_start | bool
 
     - name: Show the VM state
       ansible.builtin.command:
-        cmd: virsh domstate {{ vm_name }}
+        cmd: virsh -c {{ libvirt_uri }} domstate {{ vm_name }}
       register: libvirt_vm_state
       changed_when: false
 
