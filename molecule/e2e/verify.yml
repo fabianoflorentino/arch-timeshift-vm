@@ -43,20 +43,11 @@
         fail_msg: "E2E domain is running without the restored disk {{ vm_disk }}"
         quiet: true
 
-    - name: Resolve the guest serial console device
-      ansible.builtin.command:
-        cmd: virsh -c {{ libvirt_uri }} ttyconsole {{ e2e_vm_name }}
-      register: e2e_console_device
-      changed_when: false
-      retries: 6
-      delay: 5
-      until:
-        - e2e_console_device.rc == 0
-        - e2e_console_device.stdout | trim | length > 0
-
     - name: Read the guest serial console for health evidence
       ansible.builtin.shell: |
-        timeout 20s cat "{{ e2e_console_device.stdout | trim }}" 2>/dev/null || true
+        timeout 20s script -qec \
+          'virsh -c "{{ libvirt_uri }}" console "{{ e2e_vm_name }}" --force' \
+          /dev/null 2>/dev/null || true
       args:
         executable: /bin/bash
       register: e2e_guest_console
