@@ -28,8 +28,8 @@ em disco descartável e o domínio UEFI iniciado e verificado com KVM aninhado.
 - Suporte a unified kernel image (`EFI/Linux/<host>.efi`) no role `boot`, com
   verificação flexível de payload (initramfs ou UKI).
 - Evidência de saúde do guest no Tier 3: serviço systemd temporário no clone,
-  marcador persistente e assinatura `ARCH_TIMESHIFT_VM_E2E_HEALTHY` no console
-  serial.
+  marcador persistente e inspeção read-only do subvolume restaurado após o
+  desligamento controlado da VM.
 - Cobertura Tier 1 para os contratos de `snapshot_source` e `e2e_preflight`.
 - Documentação final: `docs/{USAGE,SAFETY,TROUBLESHOOTING,IMPLEMENTATION}.md`,
   `CHANGELOG.md`, `CONTRIBUTING.md` e `LICENSE` (MIT).

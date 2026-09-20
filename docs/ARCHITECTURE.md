@@ -31,7 +31,7 @@ snapshot_source (opcional)        valida a fonte real; criação é opt-in
 snapshot_stage                    cópia BTRFS read-only descartável
 e2e_preflight                     valida KVM/OVMF/ferramentas/rede/espaço
 [ snapshot -> disk -> restore -> boot -> libvirt ]  com libvirt_uri=qemu:///system
-verify                            domstate + disco + assinatura do guest no console serial
+verify                            domstate + disco + marcador persistente do guest
 e2e_cleanup (always)              restaura o host (domínio, NVRAM, mounts, NBD, staging)
 ```
 
@@ -51,10 +51,11 @@ e2e_cleanup (always)              restaura o host (domínio, NVRAM, mounts, NBD,
 | `e2e_cleanup` | remover domínio, NVRAM, XML, imagem, mounts, NBD e staging | sim (sandbox, nunca os snapshots reais) |
 
 No Tier 3, o role `boot` instala no clone um serviço systemd temporário que
-grava uma evidência em `/var/lib/arch-timeshift-vm/e2e-boot-ok` e emite a
-assinatura `ARCH_TIMESHIFT_VM_E2E_HEALTHY` no console serial. O serviço é
-injetado somente no disco descartável da VM; o snapshot fonte permanece
-inalterado.
+grava uma evidência em `/var/lib/arch-timeshift-vm/e2e-boot-ok`. Depois de
+confirmar que a VM iniciou, o `verify` desliga o domínio de forma controlada,
+monta o subvolume `@` do qcow2 em modo somente leitura e valida o marcador.
+O serviço é injetado somente no disco descartável da VM; o snapshot fonte
+permanece inalterado.
 
 ## Fluxo de variáveis
 

@@ -163,13 +163,14 @@ O cenário `molecule/e2e` deve consumir somente os fatos publicados por
 2. restaurar o snapshot;
 3. instalar kernel/initramfs/GRUB;
 4. definir e iniciar o domínio UEFI;
-5. verificar `virsh domstate`;
+5. verificar `virsh domstate` e o marcador de saúde persistente do guest;
 6. coletar XML, domínio, disco e logs seriais;
 7. distinguir VM iniciada de sistema operacional efetivamente pronto.
 
 O estado `running` prova que o processo QEMU iniciou, mas não prova que o
 guest terminou o boot. A verificação final deve usar um sinal do guest, como
-console serial, QEMU guest agent ou SSH, conforme a capacidade do snapshot.
+marcador persistente, QEMU guest agent ou SSH, conforme a capacidade do
+snapshot.
 
 ## 4. Cleanup e evidências
 
@@ -207,8 +208,8 @@ Os documentos finais devem cobrir:
 4. Implementar `e2e_preflight`. ✅
 5. Integrar os fatos aos cenários Molecule. ✅
 6. Executar `make e2e` com criação de snapshot desligada. ✅ (2026-09-20)
-7. Aperfeiçoar a verificação de boot do guest. ✅ assinatura systemd no
-   console serial; QEMU guest agent/SSH permanece opcional
+7. Aperfeiçoar a verificação de boot do guest. ✅ marcador systemd persistente
+   validado read-only no disco; QEMU guest agent/SSH permanece opcional
 8. Fechar documentação, changelog e gate da Fase 6. ✅
 
 ## Critério de conclusão
@@ -219,8 +220,8 @@ de forma explícita:
 - um snapshot bootável tenha sido validado; ✅
 - `make e2e` tiver iniciado e verificado a VM; ✅
 - a verificação do guest tiver evidência além do processo QEMU, quando
-  disponível; ⏳ hoje confia em `virsh domstate` + disco anexado; sinal do
-  guest (serial/agente/SSH) é melhoria aberta;
+  disponível; ✅ o clone grava um marcador systemd validado read-only após o
+  desligamento controlado;
 - cleanup tiver deixado zero resíduo; ✅
 - `make lint`, `make syntax`, `make test` e o Tier 2 continuarem verdes; ✅
 - a documentação final estiver completa. ✅

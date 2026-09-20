@@ -157,7 +157,8 @@ Plano detalhado: [`docs/IMPLEMENTATION.md`](IMPLEMENTATION.md).
 Gate: `make e2e` verde. ✅
 
 Melhoria aberta (não bloqueia o gate): a evidência atual usa um serviço
-systemd injetado somente no clone E2E e uma assinatura no console serial.
+systemd injetado somente no clone E2E, um marcador persistente no sistema
+restaurado e uma inspeção read-only do disco após o desligamento controlado.
 Uma verificação adicional por QEMU guest agent ou SSH pode ser adicionada
 quando o snapshot de referência oferecer suporte.
 

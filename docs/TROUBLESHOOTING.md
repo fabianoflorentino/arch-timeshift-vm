@@ -123,8 +123,9 @@ sudo pacman -S --needed qemu-img qemu-nbd libvirt btrfs-progs \
 
 ### A VM não chega a `running`
 
-O `verify` aguarda `virsh domstate` chegar a `running`. Consulte o estado e o
-console:
+O `verify` aguarda `virsh domstate` chegar a `running`, desliga a VM de forma
+controlada e valida o marcador persistente do guest. Consulte o estado e o
+console, se necessário:
 
 ```bash
 virsh -c qemu:///system domstate arch-timeshift-e2e
