@@ -203,11 +203,12 @@
           [Unit]
           Description=arch-timeshift-vm E2E guest health evidence
           After=local-fs.target
+          Before=multi-user.target
 
           [Service]
-          Type=simple
+          Type=oneshot
           ExecStart=/usr/local/libexec/arch-timeshift-vm-e2e-evidence
-          RemainAfterExit=no
+          RemainAfterExit=yes
 
           [Install]
           WantedBy=multi-user.target

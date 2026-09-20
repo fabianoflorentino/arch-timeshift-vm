@@ -46,7 +46,7 @@ O que acontece:
    restaurado anexado, tenta desligar a VM de forma controlada e usa
    `destroy` apenas como fallback se o guest não responder. Depois valida em
    modo somente leitura o marcador
-   `/var/lib/arch-timeshift-vm/e2e-boot-ok` criado pelo serviço systemd do
+   `/etc/arch-timeshift-vm/e2e-boot-ok` criado pelo serviço systemd do
    guest. `running` sozinho comprova apenas que o processo QEMU foi iniciado.
 6. `e2e_cleanup` (sempre) desliga/undefine o domínio, remove NVRAM/XML,
    desmonta, desconecta NBD e remove imagem e staging.

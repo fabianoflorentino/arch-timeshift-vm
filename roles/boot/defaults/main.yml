@@ -11,5 +11,5 @@ boot_restored_root: "{{ vm_mount_root | default(work_dir + '/mnt') }}-root"
 # Optional E2E-only guest health evidence. The marker is installed in the
 # restored clone, never in the source snapshot.
 boot_guest_evidence_enabled: false
-boot_guest_evidence_marker: /var/lib/arch-timeshift-vm/e2e-boot-ok
+boot_guest_evidence_marker: /etc/arch-timeshift-vm/e2e-boot-ok
 boot_guest_evidence_signature: ARCH_TIMESHIFT_VM_E2E_HEALTHY

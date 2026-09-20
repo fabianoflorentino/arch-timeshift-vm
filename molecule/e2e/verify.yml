@@ -8,7 +8,7 @@
     e2e_work_dir: "{{ lookup('env', 'E2E_WORK_DIR') | default('/var/tmp/arch-timeshift-vm-e2e/work', true) }}"
     e2e_vm_name: "{{ lookup('env', 'E2E_VM_NAME') | default('arch-timeshift-e2e', true) }}"
     libvirt_uri: qemu:///system
-    e2e_guest_evidence_marker: /var/lib/arch-timeshift-vm/e2e-boot-ok
+    e2e_guest_evidence_marker: /etc/arch-timeshift-vm/e2e-boot-ok
     e2e_guest_evidence_signature: ARCH_TIMESHIFT_VM_E2E_HEALTHY
 
   tasks:
