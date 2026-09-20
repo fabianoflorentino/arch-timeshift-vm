@@ -1,0 +1,44 @@
+---
+- name: Verify - Tier 3 VM boot
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    e2e_work_dir: "{{ lookup('env', 'E2E_WORK_DIR') | default('/var/tmp/arch-timeshift-vm-e2e/work', true) }}"
+    e2e_vm_name: "{{ lookup('env', 'E2E_VM_NAME') | default('arch-timeshift-e2e', true) }}"
+    libvirt_uri: qemu:///system
+
+  tasks:
+    - name: Load the generated E2E contract
+      ansible.builtin.include_vars:
+        file: "{{ e2e_work_dir }}/e2e-vars.yml"
+
+    - name: Wait for the VM to reach running state
+      ansible.builtin.command:
+        cmd: virsh -c {{ libvirt_uri }} domstate {{ e2e_vm_name }}
+      register: e2e_domain_state
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: e2e_domain_state.rc == 0 and (e2e_domain_state.stdout | trim) == 'running'
+
+    - name: Assert the VM is running
+      ansible.builtin.assert:
+        that:
+          - e2e_domain_state.stdout | trim == 'running'
+        fail_msg: "E2E domain {{ e2e_vm_name }} did not reach running state"
+        quiet: true
+
+    - name: Inspect the running domain
+      ansible.builtin.command:
+        cmd: virsh -c {{ libvirt_uri }} domblklist {{ e2e_vm_name }} --details
+      register: e2e_block_devices
+      changed_when: false
+
+    - name: Assert the restored disk is attached
+      ansible.builtin.assert:
+        that:
+          - vm_disk in e2e_block_devices.stdout
+        fail_msg: "E2E domain is running without the restored disk {{ vm_disk }}"
+        quiet: true

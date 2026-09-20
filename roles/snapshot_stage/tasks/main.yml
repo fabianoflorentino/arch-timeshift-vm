@@ -1,0 +1,183 @@
+---
+- name: Validate staging is explicitly enabled
+  ansible.builtin.assert:
+    that:
+      - snapshot_stage_source_root | length > 0
+      - snapshot_stage_root | length > 0
+      - snapshot_stage_name is match('^[A-Za-z0-9._-]+$')
+    fail_msg: >-
+      snapshot_stage requires a source snapshot directory, a staging root and
+      a safe staging name.
+    quiet: true
+  when: snapshot_stage_enabled | bool
+
+- name: Check staging commands
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - "command -v {{ item }}"
+  loop: "{{ snapshot_stage_required_commands }}"
+  register: snapshot_stage_commands
+  changed_when: false
+  failed_when: false
+  when: snapshot_stage_enabled | bool
+
+- name: Fail when staging commands are missing
+  ansible.builtin.assert:
+    that:
+      - (snapshot_stage_commands.results | rejectattr('rc', 'eq', 0) | list | length) == 0
+    fail_msg: >-
+      Missing staging commands:
+      {{ snapshot_stage_commands.results | rejectattr('rc', 'eq', 0)
+         | map(attribute='item') | join(', ') }}.
+    quiet: true
+  when: snapshot_stage_enabled | bool
+
+- name: Canonicalize the source snapshot
+  ansible.builtin.command:
+    cmd: realpath --canonicalize-existing "{{ snapshot_stage_source_root }}"
+  register: snapshot_stage_source_real_cmd
+  changed_when: false
+  when: snapshot_stage_enabled | bool
+
+- name: Publish the canonical source
+  ansible.builtin.set_fact:
+    snapshot_stage_source_real: "{{ snapshot_stage_source_real_cmd.stdout | trim }}"
+  when: snapshot_stage_enabled | bool
+
+- name: Check source subvolumes
+  ansible.builtin.stat:
+    path: "{{ snapshot_stage_source_real }}/{{ item }}"
+  loop:
+    - "@"
+    - "@home"
+  register: snapshot_stage_source_paths
+  when: snapshot_stage_enabled | bool
+
+- name: Assert source subvolumes exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir | default(false)
+    fail_msg: "Missing source subvolume: {{ snapshot_stage_source_real }}/{{ item.item }}"
+    quiet: true
+  loop: "{{ snapshot_stage_source_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: snapshot_stage_enabled | bool
+
+- name: Create staging directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ snapshot_stage_root }}"
+    - "{{ snapshot_stage_root }}/timeshift-btrfs"
+    - "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots"
+    - "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots/{{ snapshot_stage_name }}"
+  when: snapshot_stage_enabled | bool
+
+- name: Create read-only root staging snapshot
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - subvolume
+      - snapshot
+      - -r
+      - "{{ snapshot_stage_source_real }}/@"
+      - "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots/{{ snapshot_stage_name }}/@"
+  register: snapshot_stage_root_result
+  changed_when: true
+  when: snapshot_stage_enabled | bool
+
+- name: Create read-only home staging snapshot
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - subvolume
+      - snapshot
+      - -r
+      - "{{ snapshot_stage_source_real }}/@home"
+      - "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots/{{ snapshot_stage_name }}/@home"
+  register: snapshot_stage_home_result
+  changed_when: true
+  when: snapshot_stage_enabled | bool
+
+- name: Copy snapshot metadata into staging
+  ansible.builtin.copy:
+    src: "{{ snapshot_stage_source_real }}/info.json"
+    dest: "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots/{{ snapshot_stage_name }}/info.json"
+    remote_src: true
+    mode: "0644"
+  when: snapshot_stage_enabled | bool
+
+- name: Publish staged snapshot facts
+  ansible.builtin.set_fact:
+    e2e_snapshot_stage_dir: "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots/{{ snapshot_stage_name }}"
+    e2e_snapshot_stage_source: "{{ snapshot_stage_source_real }}"
+    timeshift_root: "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots"
+    snapshot: "{{ snapshot_stage_name }}"
+  when: snapshot_stage_enabled | bool
+
+- name: Validate staged root is read-only
+  ansible.builtin.command:
+    cmd: btrfs property get -t subvol "{{ e2e_snapshot_stage_dir }}/@"
+  register: snapshot_stage_root_property
+  changed_when: false
+  when: snapshot_stage_enabled | bool
+
+- name: Assert staged root is sendable
+  ansible.builtin.assert:
+    that:
+      - "'ro=true' in (snapshot_stage_root_property.stdout | replace(' ', ''))"
+    fail_msg: "Staged root is not read-only and cannot be sent with btrfs send."
+    quiet: true
+  when: snapshot_stage_enabled | bool
+
+- name: Measure staged subvolume usage
+  ansible.builtin.command:
+    argv:
+      - du
+      - --summarize
+      - --bytes
+      - "{{ e2e_snapshot_stage_dir }}/{{ item }}"
+  loop:
+    - "@"
+    - "@home"
+  register: snapshot_stage_usage
+  changed_when: false
+  when: snapshot_stage_enabled | bool
+
+- name: Convert the configured VM disk size
+  ansible.builtin.set_fact:
+    snapshot_stage_usage_bytes: >-
+      {{ snapshot_stage_usage.results
+         | map(attribute='stdout')
+         | map('trim')
+         | map('split', '\t')
+         | map('first')
+         | map('int')
+         | sum }}
+    snapshot_stage_disk_size_bytes: "{{ vm_disk_size | human_to_bytes }}"
+  when: snapshot_stage_enabled | bool
+
+- name: Stop when the fixed VM disk cannot contain the snapshot
+  ansible.builtin.assert:
+    that:
+      - (snapshot_stage_usage_bytes | int) < (snapshot_stage_disk_size_bytes | int)
+    fail_msg: >-
+      E2E VM disk is too small for the staged snapshot. Snapshot usage is
+      {{ snapshot_stage_usage_bytes }} bytes, while vm_disk_size is
+      {{ vm_disk_size }} ({{ snapshot_stage_disk_size_bytes }} bytes).
+      Set E2E_VM_DISK_SIZE to a value larger than the snapshot, for example
+      E2E_VM_DISK_SIZE=120G.
+    quiet: true
+  when: snapshot_stage_enabled | bool
+
+- name: Report staged usage and fixed VM disk size
+  ansible.builtin.debug:
+    msg:
+      - "Staged subvolume usage: {{ snapshot_stage_usage_bytes }} bytes"
+      - "VM disk size: {{ vm_disk_size }}"
+  when: snapshot_stage_enabled | bool

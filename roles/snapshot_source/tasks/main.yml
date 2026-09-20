@@ -1,0 +1,281 @@
+---
+- name: Validate snapshot source inputs
+  ansible.builtin.assert:
+    that:
+      - snapshot_source_root is defined
+      - snapshot_source_root | length > 0
+      - snapshot_source_name is defined
+      - snapshot_source_name | length > 0
+      - snapshot_source_name == 'latest' or
+        snapshot_source_name is match('^[A-Za-z0-9._-]+$')
+    fail_msg: >-
+      snapshot_source_root must be non-empty and snapshot_source_name must be
+      latest or a safe snapshot directory name.
+    quiet: true
+
+- name: Ensure snapshot source commands are available
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - "command -v {{ item }}"
+  loop: "{{ snapshot_source_required_commands }}"
+  register: snapshot_source_command_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail when snapshot source commands are missing
+  ansible.builtin.assert:
+    that:
+      - (snapshot_source_command_check.results | rejectattr('rc', 'eq', 0) | list | length) == 0
+    fail_msg: >-
+      Missing snapshot source commands:
+      {{ snapshot_source_command_check.results | rejectattr('rc', 'eq', 0)
+         | map(attribute='item') | join(', ') }}.
+    quiet: true
+
+- name: Require explicit confirmation before creating a snapshot
+  ansible.builtin.assert:
+    that:
+      - snapshot_source_create_confirm | bool
+    fail_msg: >-
+      Refusing to create a Timeshift snapshot without
+      snapshot_source_create_confirm=true.
+    quiet: true
+  when: snapshot_source_create | bool
+
+- name: Check Timeshift is available before creating a snapshot
+  ansible.builtin.command:
+    argv:
+      - command
+      - -v
+      - timeshift
+  register: snapshot_source_timeshift
+  changed_when: false
+  when: snapshot_source_create | bool
+
+- name: Create a Timeshift snapshot
+  ansible.builtin.command:
+    argv:
+      - timeshift
+      - --create
+      - --comments
+      - "{{ snapshot_source_create_comment }}"
+      - --tags
+      - "{{ snapshot_source_create_tags }}"
+  register: snapshot_source_create_result
+  changed_when: true
+  when: snapshot_source_create | bool
+
+- name: Canonicalize the snapshot source root
+  ansible.builtin.command:
+    cmd: realpath --canonicalize-existing "{{ snapshot_source_root }}"
+  register: snapshot_source_root_real_cmd
+  changed_when: false
+
+- name: Publish the canonical snapshot source root
+  ansible.builtin.set_fact:
+    snapshot_source_root_real: "{{ snapshot_source_root_real_cmd.stdout | trim }}"
+
+- name: Stat the snapshot source root
+  ansible.builtin.stat:
+    path: "{{ snapshot_source_root_real }}"
+  register: snapshot_source_root_stat
+
+- name: Assert the snapshot source root is a directory
+  ansible.builtin.assert:
+    that:
+      - snapshot_source_root_stat.stat.isdir | default(false)
+    fail_msg: "Snapshot source root is not a directory: {{ snapshot_source_root_real }}"
+    quiet: true
+
+- name: List candidate snapshot directories
+  ansible.builtin.find:
+    paths: "{{ snapshot_source_root_real }}"
+    recurse: false
+    file_type: directory
+  register: snapshot_source_candidates
+
+- name: Resolve the requested snapshot
+  ansible.builtin.set_fact:
+    snapshot_source_name_resolved: >-
+      {{ (snapshot_source_candidates.files | map(attribute='path')
+          | map('basename') | sort | last)
+         if snapshot_source_name == 'latest' else snapshot_source_name }}
+
+- name: Assert the requested snapshot exists
+  ansible.builtin.assert:
+    that:
+      - snapshot_source_name_resolved in
+        (snapshot_source_candidates.files | map(attribute='path')
+         | map('basename') | list)
+    fail_msg: >-
+      Snapshot '{{ snapshot_source_name_resolved }}' was not found under
+      {{ snapshot_source_root_real }}.
+    quiet: true
+
+- name: Canonicalize the selected snapshot path
+  ansible.builtin.command:
+    cmd: realpath --canonicalize-existing "{{ snapshot_source_root_real }}/{{ snapshot_source_name_resolved }}"
+  register: snapshot_source_dir_real_cmd
+  changed_when: false
+
+- name: Publish the selected snapshot facts
+  ansible.builtin.set_fact:
+    e2e_snapshot_root: "{{ snapshot_source_root_real }}"
+    e2e_snapshot_name: "{{ snapshot_source_name_resolved }}"
+    e2e_snapshot_dir: "{{ snapshot_source_dir_real_cmd.stdout | trim }}"
+
+- name: Assert the selected snapshot stays below the source root
+  ansible.builtin.assert:
+    that:
+      - e2e_snapshot_dir.startswith(e2e_snapshot_root + '/')
+    fail_msg: "Resolved snapshot escaped the configured source root."
+    quiet: true
+
+- name: Check required snapshot paths
+  ansible.builtin.stat:
+    path: "{{ e2e_snapshot_dir }}/{{ item }}"
+  loop:
+    - "@"
+    - "@home"
+    - info.json
+    - "@/etc/fstab"
+  register: snapshot_source_paths
+
+- name: Assert required snapshot paths exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir if item.item in ['@', '@home'] else item.stat.isreg
+    fail_msg: "Missing required snapshot path: {{ e2e_snapshot_dir }}/{{ item.item }}"
+    quiet: true
+  loop: "{{ snapshot_source_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read snapshot metadata
+  ansible.builtin.slurp:
+    src: "{{ e2e_snapshot_dir }}/info.json"
+  register: snapshot_source_info_raw
+
+- name: Parse snapshot metadata
+  ansible.builtin.set_fact:
+    snapshot_source_info: "{{ snapshot_source_info_raw.content | b64decode | from_json }}"
+
+- name: Validate snapshot metadata
+  ansible.builtin.assert:
+    that:
+      - snapshot_source_info.type | default('') == 'btrfs'
+      - "'@' in (snapshot_source_info.subvolumes | default({}))"
+      - "'@home' in (snapshot_source_info.subvolumes | default({}))"
+    fail_msg: "Snapshot info.json does not describe @ and @home BTRFS subvolumes."
+    quiet: true
+
+- name: Detect snapshot filesystem type
+  ansible.builtin.command:
+    cmd: stat --file-system --format=%T "{{ e2e_snapshot_dir }}"
+  register: snapshot_source_fs_type
+  changed_when: false
+
+- name: Require a BTRFS snapshot when validation is enabled
+  ansible.builtin.assert:
+    that:
+      - snapshot_source_fs_type.stdout | trim == 'btrfs'
+    fail_msg: >-
+      Snapshot source is {{ snapshot_source_fs_type.stdout | trim }}, not
+      btrfs; set snapshot_source_validate_btrfs=false only for fixtures.
+    quiet: true
+  when: snapshot_source_validate_btrfs | bool
+
+- name: Inspect read-only state of the root subvolume
+  ansible.builtin.command:
+    cmd: btrfs property get -t subvol "{{ e2e_snapshot_dir }}/@"
+  register: snapshot_source_root_property
+  changed_when: false
+  failed_when: false
+  when:
+    - snapshot_source_validate_btrfs | bool
+    - snapshot_source_fs_type.stdout | trim == 'btrfs'
+
+- name: Inspect snapshot subvolume flags
+  ansible.builtin.command:
+    cmd: btrfs subvolume show "{{ e2e_snapshot_dir }}/@"
+  register: snapshot_source_root_show
+  changed_when: false
+  when:
+    - snapshot_source_validate_btrfs | bool
+    - snapshot_source_fs_type.stdout | trim == 'btrfs'
+
+- name: Inspect mount protection for the snapshot source
+  ansible.builtin.command:
+    cmd: findmnt --noheadings --output OPTIONS --target "{{ e2e_snapshot_dir }}/@"
+  register: snapshot_source_mount_options
+  changed_when: false
+  when:
+    - snapshot_source_validate_btrfs | bool
+    - snapshot_source_require_readonly_source | bool
+
+- name: Assert the root subvolume is read-only
+  ansible.builtin.assert:
+    that:
+      - >-
+        'ro=true' in (snapshot_source_root_property.stdout | replace(' ', ''))
+        or (
+          not (snapshot_source_require_readonly_subvolume | bool)
+          and (
+            'readonly' in (snapshot_source_root_show.stdout | lower)
+            or 'ro' in (snapshot_source_mount_options.stdout | trim | split(','))
+          )
+        )
+    fail_msg: >-
+      Snapshot source @ is not a read-only BTRFS subvolume. A read-only mount
+      is not sufficient for btrfs send; create or select a Timeshift snapshot
+      with ro=true before running the E2E pipeline.
+    quiet: true
+  when:
+    - snapshot_source_validate_btrfs | bool
+    - snapshot_source_require_readonly_source | bool
+
+- name: Find kernel images in the snapshot
+  ansible.builtin.find:
+    paths: "{{ e2e_snapshot_dir }}/@/usr/lib/modules"
+    patterns: vmlinuz
+    recurse: true
+    file_type: file
+  register: snapshot_source_kernels
+
+- name: Check bootloader commands in the snapshot
+  ansible.builtin.stat:
+    path: "{{ e2e_snapshot_dir }}/@/{{ item }}"
+  loop:
+    - usr/bin/grub-install
+    - usr/bin/mkinitcpio
+  register: snapshot_source_boot_commands
+
+- name: Publish snapshot boot capabilities
+  ansible.builtin.set_fact:
+    e2e_snapshot_capabilities:
+      has_kernel: "{{ snapshot_source_kernels.matched | int > 0 }}"
+      has_grub_install: "{{ snapshot_source_boot_commands.results[0].stat.exists | bool }}"
+      has_mkinitcpio: "{{ snapshot_source_boot_commands.results[1].stat.exists | bool }}"
+
+- name: Assert the snapshot has boot artifacts
+  ansible.builtin.assert:
+    that:
+      - e2e_snapshot_capabilities.has_kernel | bool
+      - e2e_snapshot_capabilities.has_grub_install | bool
+      - e2e_snapshot_capabilities.has_mkinitcpio | bool
+    fail_msg: >-
+      Snapshot {{ e2e_snapshot_name }} is not a bootable candidate:
+      {{ e2e_snapshot_capabilities }}
+    quiet: true
+  when: snapshot_source_require_boot_artifacts | bool
+
+- name: Mark the snapshot as a bootable candidate
+  ansible.builtin.set_fact:
+    e2e_snapshot_capabilities: "{{ e2e_snapshot_capabilities | combine({'bootable_candidate': true}) }}"
+  when:
+    - e2e_snapshot_capabilities.has_kernel | bool
+    - e2e_snapshot_capabilities.has_grub_install | bool
+    - e2e_snapshot_capabilities.has_mkinitcpio | bool

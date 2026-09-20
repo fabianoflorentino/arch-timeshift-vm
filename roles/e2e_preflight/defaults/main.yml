@@ -1,0 +1,26 @@
+---
+e2e_preflight_required_commands:
+  - virsh
+  - qemu-system-x86_64
+  - qemu-img
+  - qemu-nbd
+  - btrfs
+  - sgdisk
+  - mkfs.fat
+  - arch-chroot
+  - grub-install
+  - grub-mkconfig
+  - mkinitcpio
+e2e_preflight_kvm_device: /dev/kvm
+e2e_preflight_require_kvm: true
+e2e_preflight_require_libvirt_network: true
+e2e_preflight_libvirt_uri: qemu:///system
+e2e_preflight_prepare_network: false
+e2e_preflight_require_ovmf: true
+e2e_preflight_network_name: "{{ network_name | default('default') }}"
+e2e_preflight_images_dir: "{{ vm_images_dir | default('/tmp') }}"
+e2e_preflight_min_free_bytes: 0
+e2e_preflight_ovmf_search_paths:
+  - /usr/share/edk2/x64
+  - /usr/share/edk2-ovmf/x64
+  - /usr/share/OVMF

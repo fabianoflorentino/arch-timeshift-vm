@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: e2e_preflight
+  author: Fabiano Santos Florentino
+  description: Validate host capabilities required by the E2E boot test.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: ArchLinux
+      versions:
+        - all
+
+dependencies: []

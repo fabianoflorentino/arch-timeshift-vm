@@ -1,0 +1,14 @@
+---
+- name: Cleanup - Tier 3 domain and artifacts
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    e2e_work_dir: "{{ lookup('env', 'E2E_WORK_DIR') | default('/var/tmp/arch-timeshift-vm-e2e/work', true) }}"
+    e2e_images_dir: "{{ lookup('env', 'E2E_IMAGES_DIR') | default('/var/tmp/arch-timeshift-vm-e2e/images', true) }}"
+    e2e_stage_root: "{{ lookup('env', 'E2E_STAGE_ROOT') | default('/var/tmp/arch-timeshift-vm-stage', true) }}"
+    e2e_vm_name: "{{ lookup('env', 'E2E_VM_NAME') | default('arch-timeshift-e2e', true) }}"
+
+  roles:
+    - e2e_cleanup

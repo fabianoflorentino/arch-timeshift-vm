@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: snapshot_stage
+  author: Fabiano Santos Florentino
+  description: Create a read-only BTRFS staging copy without modifying its source.
+  license: MIT
+  min_ansible_version: "2.17"
+  platforms:
+    - name: ArchLinux
+      versions:
+        - all
+
+dependencies: []

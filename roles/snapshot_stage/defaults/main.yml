@@ -1,0 +1,9 @@
+---
+snapshot_stage_source_root: "{{ e2e_snapshot_dir | default('') }}"
+snapshot_stage_root: "{{ e2e_stage_root | default('/var/tmp/arch-timeshift-vm-stage') }}"
+snapshot_stage_name: "{{ e2e_snapshot_name | default('staged') }}"
+snapshot_stage_enabled: false
+snapshot_stage_required_commands:
+  - btrfs
+  - findmnt
+  - realpath

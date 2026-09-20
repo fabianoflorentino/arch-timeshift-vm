@@ -1,0 +1,8 @@
+---
+e2e_cleanup_work_dir: "{{ e2e_work_dir | default('/var/tmp/arch-timeshift-vm-e2e/work') }}"
+e2e_cleanup_images_dir: "{{ e2e_images_dir | default('/var/tmp/arch-timeshift-vm-e2e/images') }}"
+e2e_cleanup_stage_root: "{{ e2e_stage_root | default('/var/tmp/arch-timeshift-vm-stage') }}"
+e2e_cleanup_vm_name: "{{ e2e_vm_name | default('arch-timeshift-e2e') }}"
+e2e_cleanup_libvirt_uri: qemu:///system
+e2e_cleanup_remove_stage: true
+e2e_cleanup_remove_parent: true

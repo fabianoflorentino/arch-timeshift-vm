@@ -1,0 +1,75 @@
+---
+- name: Converge - Tier 3 real boot
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    e2e_snapshot_root: "{{ lookup('env', 'E2E_TIMESHIFT_ROOT') }}"
+    e2e_images_dir: "{{ lookup('env', 'E2E_IMAGES_DIR') | default('/var/tmp/arch-timeshift-vm-e2e/images', true) }}"
+    e2e_work_dir: "{{ lookup('env', 'E2E_WORK_DIR') | default('/var/tmp/arch-timeshift-vm-e2e/work', true) }}"
+    e2e_stage_root: "{{ lookup('env', 'E2E_STAGE_ROOT') | default('/var/tmp/arch-timeshift-vm-stage', true) }}"
+    e2e_vm_name: "{{ lookup('env', 'E2E_VM_NAME') | default('arch-timeshift-e2e', true) }}"
+
+    confirm_restore: true
+    timeshift_root: "{{ e2e_snapshot_root }}"
+    snapshot: "{{ lookup('env', 'E2E_SNAPSHOT') | default('latest', true) }}"
+    vm_name: "{{ e2e_vm_name }}"
+    vm_images_dir: "{{ e2e_images_dir }}"
+    vm_disk: "{{ e2e_images_dir }}/{{ e2e_vm_name }}.qcow2"
+    work_dir: "{{ e2e_work_dir }}"
+    nvram_dir: "{{ e2e_work_dir }}/nvram"
+    vm_disk_size: "{{ lookup('env', 'E2E_VM_DISK_SIZE') | default('80G', true) }}"
+    efi_size_mib: "{{ lookup('env', 'E2E_EFI_SIZE_MIB') | default('256', true) }}"
+    vm_memory_mib: "{{ lookup('env', 'E2E_VM_MEMORY_MIB') | default('2048', true) }}"
+    vm_vcpus: "{{ lookup('env', 'E2E_VM_VCPUS') | default('2', true) }}"
+    network_name: "{{ lookup('env', 'E2E_NETWORK') | default('default', true) }}"
+    libvirt_uri: qemu:///system
+    libvirt_start: true
+    libvirt_attach_iso: false
+    libvirt_graphics: none
+    snapshot_stage_enabled: true
+    snapshot_stage_source_root: "{{ e2e_snapshot_dir }}"
+    snapshot_stage_root: "{{ e2e_stage_root }}"
+    snapshot_stage_name: "{{ e2e_snapshot_name }}"
+    snapshot_source_require_readonly_subvolume: false
+
+  pre_tasks:
+    - name: Require an explicit E2E snapshot path
+      ansible.builtin.assert:
+        that:
+          - e2e_snapshot_root | length > 0
+          - e2e_snapshot_root != 'E2E_TIMESHIFT_ROOT'
+        fail_msg: >-
+          Set E2E_TIMESHIFT_ROOT to the mounted Timeshift snapshot directory
+          before running make e2e.
+        quiet: true
+
+    - name: Create isolated E2E directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ e2e_images_dir }}"
+        - "{{ e2e_work_dir }}"
+
+  roles:
+    - e2e_preflight
+    - snapshot_source
+    - snapshot_stage
+    - snapshot
+    - disk
+    - restore
+    - boot
+    - libvirt
+
+  post_tasks:
+    - name: Record the E2E domain contract
+      ansible.builtin.copy:
+        dest: "{{ e2e_work_dir }}/e2e-vars.yml"
+        mode: "0600"
+        content: |
+          vm_name: {{ vm_name | to_json }}
+          vm_disk: {{ vm_disk | to_json }}
+          nvram_dir: {{ nvram_dir | to_json }}

@@ -1,0 +1,194 @@
+---
+- name: Validate preflight input paths
+  ansible.builtin.assert:
+    that:
+      - e2e_preflight_images_dir is defined
+      - e2e_preflight_images_dir | length > 0
+      - e2e_preflight_network_name is defined
+      - e2e_preflight_network_name | length > 0
+    fail_msg: "E2E preflight requires an image directory and libvirt network name."
+    quiet: true
+
+- name: Check required E2E commands
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - "command -v {{ item }}"
+  loop: "{{ e2e_preflight_required_commands }}"
+  register: e2e_preflight_commands
+  changed_when: false
+  failed_when: false
+
+- name: Fail when E2E commands are missing
+  ansible.builtin.assert:
+    that:
+      - (e2e_preflight_commands.results | rejectattr('rc', 'eq', 0) | list | length) == 0
+    fail_msg: >-
+      Missing E2E host commands:
+      {{ e2e_preflight_commands.results | rejectattr('rc', 'eq', 0)
+         | map(attribute='item') | join(', ') }}.
+    quiet: true
+
+- name: Check KVM device
+  ansible.builtin.stat:
+    path: "{{ e2e_preflight_kvm_device }}"
+  register: e2e_preflight_kvm
+  when: e2e_preflight_require_kvm | bool
+
+- name: Assert KVM is available and accessible
+  ansible.builtin.assert:
+    that:
+      - e2e_preflight_kvm.stat.exists
+      - e2e_preflight_kvm.stat.ischr
+      - e2e_preflight_kvm.stat.readable
+      - e2e_preflight_kvm.stat.writeable
+    fail_msg: >-
+      KVM device {{ e2e_preflight_kvm_device }} is missing or inaccessible.
+      Enable KVM/nested virtualization and grant the current user access.
+    quiet: true
+  when: e2e_preflight_require_kvm | bool
+
+- name: Check OVMF firmware files
+  ansible.builtin.find:
+    paths: "{{ e2e_preflight_ovmf_search_paths }}"
+    recurse: false
+    file_type: file
+    patterns:
+      - OVMF_CODE.4m.fd
+      - OVMF_VARS.4m.fd
+  register: e2e_preflight_ovmf
+  when: e2e_preflight_require_ovmf | bool
+
+- name: Assert OVMF firmware is available
+  ansible.builtin.assert:
+    that:
+      - >-
+        (e2e_preflight_ovmf.files | selectattr('path', 'search', 'OVMF_CODE.4m.fd')
+        | list | length) > 0
+      - >-
+        (e2e_preflight_ovmf.files | selectattr('path', 'search', 'OVMF_VARS.4m.fd')
+        | list | length) > 0
+    fail_msg: >-
+      OVMF_CODE.4m.fd and OVMF_VARS.4m.fd were not found in the configured
+      firmware directories.
+    quiet: true
+  when: e2e_preflight_require_ovmf | bool
+
+- name: Check libvirt network
+  ansible.builtin.command:
+    cmd: >-
+      virsh -c {{ e2e_preflight_libvirt_uri }}
+      net-info "{{ e2e_preflight_network_name }}"
+  register: e2e_preflight_network
+  changed_when: false
+  failed_when: false
+  when: e2e_preflight_require_libvirt_network | bool
+
+- name: Define the libvirt network when explicitly requested
+  ansible.builtin.command:
+    cmd: >-
+      virsh -c {{ e2e_preflight_libvirt_uri }}
+      net-define /etc/libvirt/qemu/networks/{{ e2e_preflight_network_name }}.xml
+  register: e2e_preflight_network_define
+  changed_when: true
+  when:
+    - e2e_preflight_require_libvirt_network | bool
+    - e2e_preflight_prepare_network | bool
+    - e2e_preflight_network.rc != 0
+
+- name: Enable autostart for the libvirt network
+  ansible.builtin.command:
+    cmd: >-
+      virsh -c {{ e2e_preflight_libvirt_uri }}
+      net-autostart "{{ e2e_preflight_network_name }}"
+  changed_when: true
+  when:
+    - e2e_preflight_require_libvirt_network | bool
+    - e2e_preflight_prepare_network | bool
+
+- name: Inspect network state before starting it
+  ansible.builtin.command:
+    cmd: >-
+      virsh -c {{ e2e_preflight_libvirt_uri }}
+      net-info "{{ e2e_preflight_network_name }}"
+  register: e2e_preflight_network_before_start
+  changed_when: false
+  when:
+    - e2e_preflight_require_libvirt_network | bool
+    - e2e_preflight_prepare_network | bool
+
+- name: Start the libvirt network
+  ansible.builtin.command:
+    cmd: >-
+      virsh -c {{ e2e_preflight_libvirt_uri }}
+      net-start "{{ e2e_preflight_network_name }}"
+  register: e2e_preflight_network_start
+  changed_when: e2e_preflight_network_start.rc == 0
+  failed_when:
+    - e2e_preflight_network_start.rc != 0
+    - "'network is already active' not in (e2e_preflight_network_start.stderr | default(''))"
+  when:
+    - e2e_preflight_require_libvirt_network | bool
+    - e2e_preflight_prepare_network | bool
+    - "'Active: yes' not in (e2e_preflight_network_before_start.stdout | default(''))"
+
+- name: Check active libvirt networks
+  ansible.builtin.command:
+    cmd: >-
+      virsh -c {{ e2e_preflight_libvirt_uri }}
+      net-list --name
+  register: e2e_preflight_active_networks
+  changed_when: false
+  when: e2e_preflight_require_libvirt_network | bool
+
+- name: Assert libvirt network is active
+  ansible.builtin.assert:
+    that:
+      - e2e_preflight_active_networks.rc | default(1) | int == 0
+      - >-
+        e2e_preflight_network_name in
+        (e2e_preflight_active_networks.stdout_lines | default([]))
+    fail_msg: >-
+      Libvirt network {{ e2e_preflight_network_name }} is unavailable or
+      inactive in {{ e2e_preflight_libvirt_uri }}. Set
+      e2e_preflight_prepare_network=true to prepare the standard network, or
+      fix it manually with virsh -c {{ e2e_preflight_libvirt_uri }}.
+    quiet: true
+  when: e2e_preflight_require_libvirt_network | bool
+
+- name: Check image directory
+  ansible.builtin.stat:
+    path: "{{ e2e_preflight_images_dir }}"
+  register: e2e_preflight_images
+
+- name: Assert image directory exists
+  ansible.builtin.assert:
+    that:
+      - e2e_preflight_images.stat.exists
+      - e2e_preflight_images.stat.isdir
+    fail_msg: "E2E image directory does not exist: {{ e2e_preflight_images_dir }}"
+    quiet: true
+
+- name: Query free space for the image directory
+  ansible.builtin.command:
+    cmd: findmnt --noheadings --bytes --output AVAIL --target "{{ e2e_preflight_images_dir }}"
+  register: e2e_preflight_space
+  changed_when: false
+
+- name: Assert sufficient free space
+  ansible.builtin.assert:
+    that:
+      - e2e_preflight_space.stdout | trim | int >= e2e_preflight_min_free_bytes | int
+    fail_msg: >-
+      E2E image directory has {{ e2e_preflight_space.stdout | trim }} bytes
+      available; at least {{ e2e_preflight_min_free_bytes }} are required.
+    quiet: true
+
+- name: Publish E2E host capabilities
+  ansible.builtin.set_fact:
+    e2e_host_capabilities:
+      kvm: "{{ e2e_preflight_require_kvm | bool }}"
+      libvirt_network: "{{ e2e_preflight_require_libvirt_network | bool }}"
+      ovmf: "{{ e2e_preflight_require_ovmf | bool }}"
+      free_bytes: "{{ e2e_preflight_space.stdout | trim | int }}"

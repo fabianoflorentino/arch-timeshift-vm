@@ -1,0 +1,15 @@
+---
+snapshot_source_root: "{{ e2e_snapshot_root | default('/var/lib/timeshift/snapshots') }}"
+snapshot_source_name: "{{ e2e_snapshot | default('latest') }}"
+snapshot_source_create: false
+snapshot_source_create_confirm: false
+snapshot_source_create_comment: "arch-timeshift-vm-e2e"
+snapshot_source_create_tags: O
+snapshot_source_require_boot_artifacts: true
+snapshot_source_validate_btrfs: true
+snapshot_source_require_readonly_source: true
+snapshot_source_require_readonly_subvolume: true
+snapshot_source_required_commands:
+  - find
+  - realpath
+  - stat

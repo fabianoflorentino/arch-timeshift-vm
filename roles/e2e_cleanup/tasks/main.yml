@@ -1,0 +1,91 @@
+---
+- name: Validate cleanup scope
+  ansible.builtin.assert:
+    that:
+      - e2e_cleanup_work_dir | length > 0
+      - e2e_cleanup_images_dir | length > 0
+      - e2e_cleanup_stage_root | length > 0
+      - e2e_cleanup_vm_name is match('^[A-Za-z0-9._-]+$')
+    fail_msg: "E2E cleanup paths and VM name must be explicitly valid."
+    quiet: true
+
+- name: Stop and undefine the E2E domain
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../libvirt/tasks/teardown.yml"
+  vars:
+    vm_name: "{{ e2e_cleanup_vm_name }}"
+    work_dir: "{{ e2e_cleanup_work_dir }}"
+    nvram_dir: "{{ e2e_cleanup_work_dir }}/nvram"
+    libvirt_uri: "{{ e2e_cleanup_libvirt_uri }}"
+
+- name: Unmount all E2E mounts
+  ansible.builtin.shell: |
+    set -uo pipefail
+    findmnt --raw --noheadings --output TARGET \
+      | awk -v root="{{ e2e_cleanup_work_dir }}" \
+        '$0 == root || index($0, root "/") == 1' \
+      | sort -r \
+      | while IFS= read -r mountpoint; do
+          [ -n "$mountpoint" ] || continue
+          umount "$mountpoint" 2>/dev/null \
+            || umount -l "$mountpoint" 2>/dev/null \
+            || true
+        done
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: Disconnect NBD devices serving the E2E workdir
+  ansible.builtin.shell: |
+    set -uo pipefail
+    for nbd in /dev/nbd*; do
+      [ -b "$nbd" ] || continue
+      pid_file="/sys/block/$(basename "$nbd")/pid"
+      [ -r "$pid_file" ] || continue
+      pid="$(cat "$pid_file" 2>/dev/null || true)"
+      [ -n "$pid" ] || continue
+      if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null \
+        | grep -Fq "{{ e2e_cleanup_work_dir }}"; then
+        qemu-nbd --disconnect "$nbd" >/dev/null 2>&1 || true
+      fi
+    done
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+
+- name: Remove the E2E disk
+  ansible.builtin.file:
+    path: "{{ e2e_cleanup_images_dir }}/{{ e2e_cleanup_vm_name }}.qcow2"
+    state: absent
+
+- name: Remove the E2E sandbox
+  ansible.builtin.file:
+    path: "{{ e2e_cleanup_work_dir | dirname }}"
+    state: absent
+  when: e2e_cleanup_remove_parent | bool
+
+- name: Remove staged BTRFS subvolumes
+  ansible.builtin.shell: |
+    set -uo pipefail
+    stage_snapshots="{{ e2e_cleanup_stage_root }}/timeshift-btrfs/snapshots"
+    [ -d "$stage_snapshots" ] || exit 0
+    while IFS= read -r -d '' subvolume; do
+      btrfs subvolume delete --commit-after "$subvolume" || true
+    done < <(find "$stage_snapshots" -mindepth 2 -maxdepth 2 -type d \
+      \( -name @home -o -name @ \) -print0)
+    while IFS= read -r -d '' snapshot_dir; do
+      btrfs subvolume delete --commit-after "$snapshot_dir" || true
+    done < <(find "$stage_snapshots" -mindepth 1 -maxdepth 1 -type d -print0)
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  when: e2e_cleanup_remove_stage | bool
+
+- name: Remove the E2E staging directory
+  ansible.builtin.file:
+    path: "{{ e2e_cleanup_stage_root }}"
+    state: absent
+  when: e2e_cleanup_remove_stage | bool

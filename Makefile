@@ -66,6 +66,32 @@ test-integration: lint ## Molecule Tier 2 (privileged BTRFS checks; prompts for 
 >       "$$HOME"/.ansible/tmp/molecule.* 2>/dev/null || true; \
 >     exit $$rc'
 
+.PHONY: e2e
+e2e: lint ## Molecule Tier 3 (opt-in boot test; requires E2E_TIMESHIFT_ROOT)
+> @test -n "$${E2E_TIMESHIFT_ROOT:-}" || \
+>   (echo "E2E_TIMESHIFT_ROOT must point to a real Timeshift snapshot root" >&2; exit 2)
+> sudo -E env "PATH=$(CURDIR)/$(BIN):$$PATH" \
+>   "ANSIBLE_PYTHON_INTERPRETER=$(CURDIR)/$(BIN)/python" \
+>   "DOCKER_CONFIG=$(DOCKER_CONFIG)" "DOCKER_HOST=$(DOCKER_HOST)" \
+>   bash -c '$(BIN)/molecule test -s e2e; rc=$$?; \
+>     chown -R "$${SUDO_UID:-$(HOST_UID)}:$${SUDO_GID:-$(HOST_GID)}" \
+>       "$$HOME"/.ansible/tmp/molecule.* 2>/dev/null || true; \
+>     exit $$rc'
+
+.PHONY: prepare-e2e
+prepare-e2e: lint ## Validate a Timeshift source (requires SNAPSHOT_SOURCE_ROOT)
+> @test -n "$${SNAPSHOT_SOURCE_ROOT:-}" || \
+>   (echo "SNAPSHOT_SOURCE_ROOT must point to a Timeshift snapshots directory" >&2; exit 2)
+> sudo "$(CURDIR)/$(BIN)/ansible-playbook" playbooks/prepare-e2e.yml \
+>   -e "snapshot_source_root=$$SNAPSHOT_SOURCE_ROOT"
+
+.PHONY: clean-e2e
+clean-e2e: ## Remove E2E mounts, NBD devices and temporary artifacts
+> sudo -E env "PATH=$(CURDIR)/$(BIN):$$PATH" \
+>   "ANSIBLE_PYTHON_INTERPRETER=$(CURDIR)/$(BIN)/python" \
+>   "DOCKER_CONFIG=$(DOCKER_CONFIG)" "DOCKER_HOST=$(DOCKER_HOST)" \
+>   "$(CURDIR)/$(BIN)/molecule" cleanup -s e2e
+
 .PHONY: clean
 clean: ## Remove caches, docker config and molecule scratch
 > rm -rf .cache .docker molecule/*/.molecule

@@ -1,0 +1,9 @@
+---
+- name: Prepare and validate the snapshot source for E2E
+  hosts: localhost
+  become: true
+  gather_facts: false
+
+  roles:
+    - snapshot_source
+    - e2e_preflight
