@@ -102,6 +102,26 @@
         mode: "0644"
       when: boot_install_grub | bool
 
+    - name: Remount the restored EFI System Partition read-write  # noqa command-instead-of-module
+      ansible.builtin.command:
+        cmd: mount -o remount,rw "{{ boot_restored_root }}/boot"
+      changed_when: false
+      when: boot_install_grub | bool
+
+    - name: Ensure the unified kernel image directory exists
+      ansible.builtin.file:
+        path: "{{ boot_restored_root }}/boot/EFI/Linux"
+        state: directory
+        mode: "0755"
+      when: boot_install_grub | bool
+
+    - name: Ensure the unified kernel image target is writable
+      ansible.builtin.file:
+        path: "{{ boot_restored_root }}/boot/EFI/Linux/arch-linux.efi"
+        state: touch
+        mode: "0644"
+      when: boot_install_grub | bool
+
     - name: Generate initramfs inside the chroot
       ansible.builtin.command:
         argv:
@@ -142,25 +162,45 @@
       ansible.builtin.set_fact:
         boot_chroot_prepared: true
 
-    - name: Verify the boot artifacts exist
+    - name: Verify required boot artifacts exist
       ansible.builtin.stat:
         path: "{{ boot_restored_root }}/boot/{{ item }}"
       loop:
         - vmlinuz-linux
-        - initramfs-linux.img
         - EFI/BOOT/BOOTX64.EFI
         - grub/grub.cfg
-      register: boot_artifacts
+      register: boot_required_artifacts
 
-    - name: Assert the boot artifacts exist
+    - name: Assert required boot artifacts exist
       ansible.builtin.assert:
         that:
           - item.stat.exists
         fail_msg: "Boot artifact missing: {{ item.item }}"
         quiet: true
-      loop: "{{ boot_artifacts.results }}"
+      loop: "{{ boot_required_artifacts.results }}"
       loop_control:
         label: "{{ item.item }}"
+      when: boot_install_grub | bool
+
+    - name: Check traditional initramfs and unified kernel image
+      ansible.builtin.stat:
+        path: "{{ boot_restored_root }}/boot/{{ item }}"
+      loop:
+        - initramfs-linux.img
+        - EFI/Linux/arch-linux.efi
+      register: boot_kernel_payloads
+      when: boot_install_grub | bool
+
+    - name: Assert a kernel payload exists
+      ansible.builtin.assert:
+        that:
+          - >-
+            (boot_kernel_payloads.results[0].stat.exists | bool) or
+            (boot_kernel_payloads.results[1].stat.exists | bool)
+        fail_msg: >-
+          Neither a traditional initramfs nor a unified kernel image was
+          generated in the restored EFI System Partition.
+        quiet: true
       when: boot_install_grub | bool
 
   always:
