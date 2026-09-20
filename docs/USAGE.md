@@ -43,10 +43,11 @@ O que acontece:
 4. O pipeline (`snapshot`, `disk`, `restore`, `boot`, `libvirt`) produz a VM
    em `/var/tmp/arch-timeshift-vm-e2e` e a inicia com UEFI/KVM.
 5. `verify` aguarda `virsh domstate` chegar a `running`, confere o disco
-   restaurado anexado, desliga a VM de forma controlada e valida em modo
-   somente leitura o marcador `/var/lib/arch-timeshift-vm/e2e-boot-ok`
-   criado pelo serviço systemd do guest. `running` sozinho comprova apenas
-   que o processo QEMU foi iniciado.
+   restaurado anexado, tenta desligar a VM de forma controlada e usa
+   `destroy` apenas como fallback se o guest não responder. Depois valida em
+   modo somente leitura o marcador
+   `/var/lib/arch-timeshift-vm/e2e-boot-ok` criado pelo serviço systemd do
+   guest. `running` sozinho comprova apenas que o processo QEMU foi iniciado.
 6. `e2e_cleanup` (sempre) desliga/undefine o domínio, remove NVRAM/XML,
    desmonta, desconecta NBD e remove imagem e staging.
 

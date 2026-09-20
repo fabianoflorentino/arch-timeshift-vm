@@ -52,7 +52,8 @@ e2e_cleanup (always)              restaura o host (domínio, NVRAM, mounts, NBD,
 
 No Tier 3, o role `boot` instala no clone um serviço systemd temporário que
 grava uma evidência em `/var/lib/arch-timeshift-vm/e2e-boot-ok`. Depois de
-confirmar que a VM iniciou, o `verify` desliga o domínio de forma controlada,
+confirmar que a VM iniciou, o `verify` tenta desligar o domínio de forma controlada e usa `destroy` somente
+como fallback,
 monta o subvolume `@` do qcow2 em modo somente leitura e valida o marcador.
 O serviço é injetado somente no disco descartável da VM; o snapshot fonte
 permanece inalterado.

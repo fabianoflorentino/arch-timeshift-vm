@@ -59,9 +59,27 @@
       changed_when: false
       retries: 12
       delay: 5
+      failed_when: false
       until:
         - e2e_shutdown_state.rc == 0
         - e2e_shutdown_state.stdout | trim == 'shut off'
+
+    - name: Force-stop the VM when graceful shutdown did not complete
+      ansible.builtin.command:
+        cmd: virsh -c {{ libvirt_uri }} destroy {{ e2e_vm_name }}
+      when: e2e_shutdown_state.stdout | trim != 'shut off'
+      changed_when: true
+
+    - name: Wait for the VM to be fully stopped
+      ansible.builtin.command:
+        cmd: virsh -c {{ libvirt_uri }} domstate {{ e2e_vm_name }}
+      register: e2e_forced_shutdown_state
+      changed_when: false
+      retries: 6
+      delay: 2
+      until:
+        - e2e_forced_shutdown_state.rc == 0
+        - e2e_forced_shutdown_state.stdout | trim == 'shut off'
 
     - name: Connect the E2E disk read-only for guest evidence
       block:
