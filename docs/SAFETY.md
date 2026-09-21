@@ -47,4 +47,4 @@ Revise antes de executar:
 - `confirm_restore`, `vm_name`, `vm_disk`, `vm_images_dir`, `vm_disk_size`.
 - `libvirt_start`, `libvirt_attach_iso`, `libvirt_graphics`.
 
-Veja também [`docs/USAGE.md`](USAGE.md) e [`docs/PLAN.md`](PLAN.md).
+Veja também [`docs/USAGE.md`](USAGE.md) e [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).

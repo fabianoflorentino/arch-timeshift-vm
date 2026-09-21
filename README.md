@@ -4,9 +4,39 @@ Restaura um snapshot do Timeshift/BTRFS do host em uma VM libvirt/KVM
 bootável e descartável, inteiramente no host - sem VirtioFS e sem ISO de
 instalação.
 
-> Status: fases 1-6 implementadas e validadas. Tier 1, Tier 2 e Tier 3 (boot
-> real com KVM aninhado) verdes. Veja [`docs/PLAN.md`](docs/PLAN.md) para o
-> plano por fases, o andamento e as melhorias abertas.
+> Status: fases 0-6 implementadas e validadas. Tier 1, Tier 2 e Tier 3 (boot
+> real com KVM aninhado) verdes. Veja [`docs/USAGE.md`](docs/USAGE.md) para o
+> guia operacional e [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) para a
+> arquitetura.
+
+## Como usar
+
+Fluxo do usuário final: o default é seguro (`confirm_restore: false`), o
+snapshot é resolvido de forma determinística e a VM é descartável.
+
+```mermaid
+flowchart LR
+    A(["sudo ansible-playbook<br/>playbooks/restore.yml"]) --> G{"confirm_restore<br/>== true?"}
+    G -- "não · padrão seguro" --> AB(["Aborta: nada é tocado"])
+    G -- "sim" --> R["1 · snapshot<br/>resolve e valida o snapshot"]
+    R --> D["2 · disk<br/>qcow2 descartável + NBD + GPT"]
+    D --> RS["3 · restore<br/>btrfs send/receive @ e @home"]
+    RS --> B["4 · boot<br/>kernel/initramfs + GRUB UEFI"]
+    B --> L["5 · libvirt<br/>define e inicia a VM"]
+    L --> VM(["VM bootável e descartável"])
+    B -. "falha em qualquer fase" .-> T["teardown auto<br/>desmonta · desconecta NBD · limpa"]
+
+    classDef gate fill:#fff4e6,stroke:#e8590c,stroke-width:2px,color:#7a2e00
+    classDef danger fill:#fff0f6,stroke:#c2255c,stroke-width:2px,color:#6b0f3a
+    classDef done fill:#f3f0ff,stroke:#7048e8,stroke-width:2px,color:#3b1f8a
+    class G gate
+    class AB danger
+    class VM,T done
+```
+
+Para o teste end-to-end (boot real com KVM aninhado), o fluxo também valida a
+fonte, copia o snapshot para um staging read-only e limpa tudo ao final —
+veja [`docs/USAGE.md`](docs/USAGE.md).
 
 ## Como funciona
 
@@ -222,11 +252,10 @@ requirements.yml / requirements-dev.txt
 Makefile
 LICENSE
 CHANGELOG.md / CONTRIBUTING.md
-docs/{PLAN,ARCHITECTURE,USAGE,SAFETY,TROUBLESHOOTING,IMPLEMENTATION}.md
+docs/{ARCHITECTURE,USAGE,SAFETY,TROUBLESHOOTING}.md
 group_vars/all.yml
 inventory/localhost.yml
-playbooks/restore.yml
-playbooks/prepare-e2e.yml
+playbooks/{restore,prepare-e2e}.yml
 roles/{snapshot,disk,restore,boot,libvirt}/
 roles/{snapshot_source,snapshot_stage,e2e_preflight,e2e_cleanup}/
 molecule/{default,integration,e2e}/

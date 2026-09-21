@@ -61,7 +61,7 @@ em disco descartável e o domínio UEFI iniciado e verificado com KVM aninhado.
   marcador persistente e inspeção read-only do subvolume restaurado após o
   desligamento controlado da VM.
 - Cobertura Tier 1 para os contratos de `snapshot_source` e `e2e_preflight`.
-- Documentação final: `docs/{USAGE,SAFETY,TROUBLESHOOTING,IMPLEMENTATION}.md`,
+- Documentação final: `docs/{USAGE,SAFETY,TROUBLESHOOTING,ARCHITECTURE}.md`,
   `CHANGELOG.md`, `CONTRIBUTING.md` e `LICENSE` (MIT).
 
 ## Fase 5 - libvirt + cleanup

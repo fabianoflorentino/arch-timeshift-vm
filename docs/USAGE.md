@@ -13,6 +13,24 @@ descartável.
 sudo ansible-playbook playbooks/restore.yml -e confirm_restore=true
 ```
 
+Fluxo completo de uma execução. O `teardown` roda sempre — em sucesso ou
+falha — e garante que o host não fique com mounts, NBD ou resíduo:
+
+```mermaid
+flowchart TD
+    Start(["sudo ansible-playbook<br/>playbooks/restore.yml -e confirm_restore=true"]) --> Pre
+    Pre["1 · snapshot: preflight somente leitura<br/>resolve snapshot, valida disco e espaço"] --> Disk
+    Disk["2 · disk: qcow2 descartável<br/>NBD + GPT (ESP + BTRFS) + mounts"] --> Rst
+    Rst["3 · restore: btrfs send/receive<br/>fstab da VM + identidade do clone"] --> Boot
+    Boot["4 · boot: kernel/initramfs<br/>GRUB UEFI + grub.cfg"] --> Lib
+    Lib["5 · libvirt: domain.xml + NVRAM<br/>virsh define + start"] --> VM(["VM bootável e descartável"])
+    Disk -. "falha em qualquer fase" .-> Cleanup
+    Rst -.-> Cleanup
+    Boot -.-> Cleanup
+    Lib -.-> Cleanup
+    Cleanup["teardown always<br/>desmonta · desconecta NBD · undefine · troca atômica do disco"] --> Safe(["host intacto: fstab e snapshots nunca tocados"])
+```
+
 Para selecionar um snapshot e uma VM:
 
 ```bash
@@ -31,6 +49,20 @@ seleciona um snapshot por heurística; o snapshot usado é registrado em
 
 ```bash
 E2E_TIMESHIFT_ROOT=/mnt/btrfs-top/timeshift-btrfs/snapshots make e2e
+```
+
+O fluxo do E2E valida o host e a fonte antes de tocar qualquer disco, usa uma
+cópia read-only do snapshot real e limpa tudo ao final:
+
+```mermaid
+flowchart TD
+    E["E2E_TIMESHIFT_ROOT=<dir> make e2e"] --> PF["e2e_preflight<br/>KVM · OVMF · ferramentas · rede · espaço"]
+    PF --> SS["snapshot_source<br/>resolve e valida o snapshot real"]
+    SS --> SG["snapshot_stage<br/>cópia read-only descartável"]
+    SG --> PIPE["snapshot → disk → restore → boot → libvirt<br/>(pipeline completo)"]
+    PIPE --> VF["verify<br/>domstate · disco anexado · guest agent · marcador"]
+    VF --> CL["e2e_cleanup<br/>domínio · NVRAM · XML · mounts · NBD · staging"]
+    CL --> Z(["host sem resíduo"])
 ```
 
 O que acontece:

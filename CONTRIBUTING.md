@@ -32,8 +32,8 @@ Sem o `E2E_TIMESHIFT_ROOT`, o alvo falha de propósito
 
 - `make lint` limpo para o escopo alterado (role fora de `exclude_paths`).
 - Testes novos cobrem positivos, negativos e resíduo/cleanup.
-- A documentação afetada foi atualizada
-  ([`docs/PLAN.md`](docs/PLAN.md) exige isso na Definition of Done).
+- A documentação afetada foi atualizada para o usuário final; não deixe
+  referências quebradas entre arquivos de `docs/` e o `README.md`.
 - Nenhum teste toca snapshots reais nem imagens reais.
 
 ## Commits

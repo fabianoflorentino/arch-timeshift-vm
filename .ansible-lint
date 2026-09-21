@@ -1,9 +1,8 @@
 ---
 # Lint baseline.
 #
-# The five legacy roles under roles/ are being rewritten phase by phase
-# (see docs/PLAN.md). Each phase removes its role from exclude_paths and
-# guarantees zero findings for that role before the next phase starts.
+# Roles under roles/ are linted incrementally; each one leaves exclude_paths
+# once it meets the production profile with zero findings.
 profile: production
 
 exclude_paths:
@@ -13,7 +12,7 @@ exclude_paths:
   - .docker/
   - .venv/
   - molecule/*/.molecule/
-  # Remaining legacy roles, rewritten phase by phase (docs/PLAN.md).
+  # Remaining legacy roles, rewritten incrementally.
   - roles/libvirt/
 
 skip_list:
