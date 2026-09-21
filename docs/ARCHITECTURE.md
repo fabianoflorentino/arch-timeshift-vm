@@ -2,37 +2,45 @@
 
 ## Pipeline
 
-```
-Timeshift / BTRFS snapshot
-        |
-        v
-  preflight (snapshot)      resolve + valida snapshot e travas de seguranca
-        |
-        v
-  disk                      qcow2 -> qemu-nbd -> GPT (EFI + BTRFS) -> mkfs/mounts
-        |
-        v
-  restore                   btrfs receive @/@home -> fstab da VM -> identidade
-        |
-        v
-  boot                      kernel/initramfs -> GRUB UEFI
-        |
-        v
-  libvirt                   XML + NVRAM -> virsh define/start
-        |
-        v
-  teardown (always)         desmonta tudo, desconecta NBD, remove residuo
+```mermaid
+flowchart TD
+    S(["Timeshift / BTRFS snapshot"]) --> P1["snapshot · preflight<br/>resolve + valida snapshot e travas de segurança"]:::ro
+    P1 --> P2["disk<br/>qcow2 → qemu-nbd → GPT (EFI + BTRFS) → mkfs/mounts"]:::rw
+    P2 --> P3["restore<br/>btrfs receive @/@home → fstab da VM → identidade"]:::rw
+    P3 --> P4["boot<br/>kernel/initramfs → GRUB UEFI"]:::rw
+    P4 --> P5["libvirt<br/>XML + NVRAM → virsh define/start"]:::rw
+    P5 --> VM(["VM bootável e descartável"]):::done
+    P2 -. "falha em qualquer fase" .-> T["teardown (always)<br/>desmonta tudo · desconecta NBD · remove resíduo"]:::danger
+    P3 -.-> T
+    P4 -.-> T
+    P5 -.-> T
+
+    classDef ro fill:#e7f5ff,stroke:#1971c2,stroke-width:2px,color:#0b3d66
+    classDef rw fill:#e6fcf5,stroke:#0ca678,stroke-width:2px,color:#064e3b
+    classDef done fill:#f3f0ff,stroke:#7048e8,stroke-width:2px,color:#3b1f8a
+    classDef danger fill:#fff0f6,stroke:#c2255c,stroke-width:2px,color:#6b0f3a
 ```
 
 Tier 3 (`make e2e`) estende o pipeline com uma fonte preparada:
 
-```
-snapshot_source (opcional)        valida a fonte real; criação é opt-in
-snapshot_stage                    cópia BTRFS read-only descartável
-e2e_preflight                     valida KVM/OVMF/ferramentas/rede/espaço
-[ snapshot -> disk -> restore -> boot -> libvirt ]  com libvirt_uri=qemu:///system
-verify                            domstate + disco + guest agent + marcador persistente
-e2e_cleanup (always)              restaura o host (domínio, NVRAM, mounts, NBD, staging)
+```mermaid
+flowchart LR
+    SS["snapshot_source (opcional)<br/>valida a fonte real; criação é opt-in"]:::ro
+    SG["snapshot_stage<br/>cópia BTRFS read-only descartável"]:::rw
+    PF["e2e_preflight<br/>valida KVM · OVMF · ferramentas · rede · espaço"]:::ro
+    PIPE["snapshot → disk → restore → boot → libvirt<br/>libvirt_uri = qemu:///system"]:::rw
+    VF["verify<br/>domstate · disco · guest agent · marcador persistente"]:::ro
+    CL["e2e_cleanup (always)<br/>restaura o host: domínio · NVRAM · XML · mounts · NBD · staging"]:::danger
+
+    SS --> SG --> PF --> PIPE
+    PIPE --> VF --> EV(["VM iniciada e evidência validada"]):::done
+    PIPE -. "sempre" .-> CL
+    VF -. "sempre" .-> CL
+
+    classDef ro fill:#e7f5ff,stroke:#1971c2,stroke-width:2px,color:#0b3d66
+    classDef rw fill:#e6fcf5,stroke:#0ca678,stroke-width:2px,color:#064e3b
+    classDef done fill:#f3f0ff,stroke:#7048e8,stroke-width:2px,color:#3b1f8a
+    classDef danger fill:#fff0f6,stroke:#c2255c,stroke-width:2px,color:#6b0f3a
 ```
 
 ## Papel de cada role
