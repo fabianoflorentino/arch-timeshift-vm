@@ -192,7 +192,10 @@ sudo ansible-playbook playbooks/restore.yml \
   snapshot em sandbox com BTRFS sintético (loopback); **requer root** (o
   alvo chama `sudo -E`).
 - `make e2e` - Tier 3: boot real da VM com KVM aninhado; requer
-  `E2E_TIMESHIFT_ROOT` explícito.
+  `E2E_TIMESHIFT_ROOT` explícito. A saúde do guest é exigida por marcador
+  systemd persistente (validação read-only após desligamento controlado) e,
+  quando o snapshot oferece qemu-guest-agent, também por `guest-ping` pelo
+  canal virtio-serial durante a execução.
 - `playbooks/prepare-e2e.yml` - valida a fonte Timeshift e as capacidades de
   boot; criação de snapshot é opt-in e confirmada explicitamente.
 

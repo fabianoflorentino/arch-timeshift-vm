@@ -31,7 +31,7 @@ snapshot_source (opcional)        valida a fonte real; criação é opt-in
 snapshot_stage                    cópia BTRFS read-only descartável
 e2e_preflight                     valida KVM/OVMF/ferramentas/rede/espaço
 [ snapshot -> disk -> restore -> boot -> libvirt ]  com libvirt_uri=qemu:///system
-verify                            domstate + disco + marcador persistente do guest
+verify                            domstate + disco + guest agent + marcador persistente
 e2e_cleanup (always)              restaura o host (domínio, NVRAM, mounts, NBD, staging)
 ```
 
@@ -51,8 +51,12 @@ e2e_cleanup (always)              restaura o host (domínio, NVRAM, mounts, NBD,
 | `e2e_cleanup` | remover domínio, NVRAM, XML, imagem, mounts, NBD e staging | sim (sandbox, nunca os snapshots reais) |
 
 No Tier 3, o role `boot` instala no clone um serviço systemd temporário que
-grava uma evidência em `/etc/arch-timeshift-vm/e2e-boot-ok`. Depois de
-confirmar que a VM iniciou, o `verify` tenta desligar o domínio de forma controlada e usa `destroy` somente
+grava uma evidência em `/etc/arch-timeshift-vm/e2e-boot-ok`. Se o clone também
+tiver o QEMU guest agent (`qemu-ga` + `qemu-guest-agent.service`), o role o
+habilita via `systemctl enable --root` e publica `boot_guest_agent_available`.
+O `verify` cobra, enquanto o domínio roda, uma resposta a `guest-ping` no canal
+virtio-serial `org.qemu.guest_agent.0`. Depois de confirmar que a VM iniciou, o
+`verify` tenta desligar o domínio de forma controlada e usa `destroy` somente
 como fallback,
 monta o subvolume `@` do qcow2 em modo somente leitura e valida o marcador.
 O serviço é injetado somente no disco descartável da VM; o snapshot fonte
@@ -77,6 +81,8 @@ permanece inalterado.
 - Fatos do E2E: `e2e_snapshot_dir`, `e2e_snapshot_name`,
   `e2e_snapshot_capabilities` (`snapshot_source`), `e2e_snapshot_stage_dir`
   (`snapshot_stage`), `e2e_host_capabilities` (`e2e_preflight`).
+  `boot_guest_agent_available` (role `boot`) informa se o clone oferece o QEMU
+  guest agent e é registrado em `e2e-vars.yml` para o `verify`.
 
 ## Fatos do host de referência (detectados)
 

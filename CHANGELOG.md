@@ -1,8 +1,38 @@
 # Changelog
 
-Todas as mudanças notáveis por fase.
+Todas as mudanças notáveis por versão.
 
-O formato segue as fases do [`docs/PLAN.md`](docs/PLAN.md).
+As versões seguem as fases de desenvolvimento do projeto (Fase 0-6) e suas
+melhorias (ex.: Fase 6.1).
+
+## Fase 6.1 - Evidência de saúde do guest via QEMU guest agent (2026-09-21)
+
+Melhoria da Fase 6: adiciona evidência de saúde do guest **durante a execução**,
+além do marcador persistente validado após o desligamento controlado.
+
+### Adicionado
+
+- `roles/boot/tasks/guest_agent.yml`: detecta o QEMU guest agent no clone
+  (`/usr/bin/qemu-ga` + unit `qemu-guest-agent.service`), publica
+  `boot_guest_agent_available` e habilita o serviço no clone descartável com
+  `systemctl enable --root` (resolve `[Install]`/socket activation sem exigir
+  systemd rodando no guest).
+- `molecule/e2e/verify.yml`: exigência de `guest-ping` pelo canal virtio-serial
+  `org.qemu.guest_agent.0` quando o snapshot oferece o agente; retry ~150 s.
+- `molecule/e2e/converge.yml`: registra `e2e_guest_agent_available` no
+  contrato `e2e-vars.yml` consumido pelo verifier.
+- Cobertura Tier 1 para a detecção/habilitação do guest agent (positivo com
+  clone sintético e negativo sem agente).
+- Documentação atualizada: `PLAN`, `IMPLEMENTATION`, `USAGE`, `ARCHITECTURE` e
+  `TROUBLESHOOTING`.
+
+### Comportamento
+
+- Snapshot **com** guest agent: o E2E passa a exigir a resposta do agente além
+  do marcador.
+- Snapshot **sem** guest agent (como `2026-09-20_14-00-00`): a asserção é
+  pulada e a evidência continua sendo o marcador — mantém verde sem modificação
+  da fonte.
 
 ## Fase 6 - End-to-end e documentação final (2026-09-20)
 

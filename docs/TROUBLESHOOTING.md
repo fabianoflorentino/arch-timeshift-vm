@@ -142,6 +142,25 @@ O `mkinitcpio -P` não produziu `initramfs-linux.img` nem `EFI/Linux/arch-linux.
 na ESP. Repita o boot com `E2E_WORK_DIR` preservado e inspecione os arquivos
 em `/var/tmp/arch-timeshift-vm-e2e/work`.
 
+### "The guest agent did not answer guest-ping"
+
+A verificação é cobrada apenas quando o snapshot de referência oferece o
+agente (binário `qemu-ga` + unit `qemu-guest-agent.service` no clone). Se o
+snapshot não tiver o agente, o `verify` pula a asserção e usa somente o
+marcador persistente. Para diagnosticar quando a mensagem aparece:
+
+```bash
+# confirme que o canal virtio-serial existe no domínio
+virsh -c qemu:///system dumpxml arch-timeshift-e2e | rg -A2 guest_agent
+# interaja com o agente manualmente
+virsh -c qemu:///system qemu-agent-command arch-timeshift-e2e \
+  --timeout 10 '{"execute":"guest-info"}'
+```
+
+Causas comuns: canal `org.qemu.guest_agent.0` ausente do XML, guest ainda
+inicializando (a espera padrão do `verify` é de ~150 s) ou o `qemu-ga` presente
+mas com o unit de serviço ausente/corrompido no snapshot.
+
 ## Limpeza de execução interrompida
 
 Se um `make e2e` for interrompido e deixar mounts/NBD/domínio pendurados:
