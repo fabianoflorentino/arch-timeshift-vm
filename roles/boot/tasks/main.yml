@@ -218,11 +218,14 @@
     - name: Enable guest health evidence service
       ansible.builtin.file:
         src: /etc/systemd/system/arch-timeshift-vm-e2e-evidence.service
-        dest: >-
-          {{ boot_restored_root }}/etc/systemd/system/basic.target.wants/
-          arch-timeshift-vm-e2e-evidence.service
+        dest: "{{ boot_restored_root }}/etc/systemd/system/basic.target.wants/arch-timeshift-vm-e2e-evidence.service"
         state: link
         force: true
+      when: boot_guest_evidence_enabled | bool
+
+    - name: Wire the QEMU guest agent in the clone when supported
+      ansible.builtin.include_tasks:
+        file: guest_agent.yml
       when: boot_guest_evidence_enabled | bool
 
     - name: Record that the chroot was prepared

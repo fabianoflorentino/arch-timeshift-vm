@@ -9,7 +9,10 @@ boot_allow_missing_grub: false
 boot_restored_root: "{{ vm_mount_root | default(work_dir + '/mnt') }}-root"
 
 # Optional E2E-only guest health evidence. The marker is installed in the
-# restored clone, never in the source snapshot.
+# restored clone, never in the source snapshot. When the clone also ships
+# qemu-guest-agent (binary + systemd unit), the role enables the agent inside
+# the clone so the domain answers guest-ping over the virtio-serial channel;
+# boot_guest_agent_available is published for the E2E verifier.
 boot_guest_evidence_enabled: false
 boot_guest_evidence_marker: /etc/arch-timeshift-vm/e2e-boot-ok
 boot_guest_evidence_signature: ARCH_TIMESHIFT_VM_E2E_HEALTHY

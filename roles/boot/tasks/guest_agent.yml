@@ -1,0 +1,50 @@
+---
+# E2E wiring for the QEMU guest agent inside the disposable clone.
+#
+# The source snapshot may or may not ship qemu-guest-agent. When both the
+# qemu-ga binary and its systemd unit exist in the restored clone, the agent
+# is enabled there so the running domain answers `guest-ping` over the
+# org.qemu.guest_agent.0 virtio-serial channel. The enable is delegated to
+# `systemctl enable --root`, which resolves the unit [Install] section
+# (including socket activation) without needing a running systemd in the
+# clone. Nothing here touches the source snapshot.
+
+- name: Detect the qemu-ga binary in the restored clone
+  ansible.builtin.stat:
+    path: "{{ boot_restored_root }}/usr/bin/qemu-ga"
+  register: boot_guest_agent_bin
+
+- name: Detect the qemu-guest-agent service unit in the restored clone
+  ansible.builtin.stat:
+    path: "{{ boot_restored_root }}/usr/lib/systemd/system/qemu-guest-agent.service"
+  register: boot_guest_agent_unit
+
+- name: Publish whether the clone offers the QEMU guest agent
+  ansible.builtin.set_fact:
+    boot_guest_agent_available: >-
+      {{ (boot_guest_agent_bin.stat.exists | bool) and
+         (boot_guest_agent_unit.stat.exists | bool) }}
+
+- name: Check whether the guest agent service is already enabled
+  ansible.builtin.command:  # noqa command-instead-of-module
+    argv:
+      - systemctl
+      - "--root={{ boot_restored_root }}"
+      - is-enabled
+      - qemu-guest-agent.service
+  register: boot_guest_agent_enabled_state
+  changed_when: false
+  failed_when: false
+  when: boot_guest_agent_available | bool
+
+- name: Enable the guest agent service inside the restored clone
+  ansible.builtin.command:  # noqa command-instead-of-module
+    argv:
+      - systemctl
+      - enable
+      - "--root={{ boot_restored_root }}"
+      - qemu-guest-agent.service
+  changed_when: true
+  when:
+    - boot_guest_agent_available | bool
+    - boot_guest_agent_enabled_state.rc | default(1) | int != 0
