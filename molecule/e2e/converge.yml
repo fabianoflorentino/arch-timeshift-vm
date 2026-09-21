@@ -74,3 +74,4 @@
           vm_name: {{ vm_name | to_json }}
           vm_disk: {{ vm_disk | to_json }}
           nvram_dir: {{ nvram_dir | to_json }}
+          e2e_guest_agent_available: {{ (boot_guest_agent_available | default(false) | bool) | to_json }}

@@ -10,6 +10,8 @@
     libvirt_uri: qemu:///system
     e2e_guest_evidence_marker: /etc/arch-timeshift-vm/e2e-boot-ok
     e2e_guest_evidence_signature: ARCH_TIMESHIFT_VM_E2E_HEALTHY
+    e2e_guest_agent_channel: org.qemu.guest_agent.0
+    e2e_guest_agent_ping_retries: 30
 
   tasks:
     - name: Load the generated E2E contract
@@ -43,6 +45,30 @@
         that:
           - vm_disk in e2e_block_devices.stdout
         fail_msg: "E2E domain is running without the restored disk {{ vm_disk }}"
+        quiet: true
+
+    - name: Ping the QEMU guest agent over the virtio-serial channel
+      ansible.builtin.command:
+        cmd: >-
+          virsh -c {{ libvirt_uri }} qemu-agent-command {{ e2e_vm_name }}
+          --timeout 10 '{"execute":"guest-ping"}'
+      register: e2e_guest_agent
+      changed_when: false
+      failed_when: false
+      retries: "{{ e2e_guest_agent_ping_retries if (e2e_guest_agent_available | bool) else 1 }}"
+      delay: 5
+      until: e2e_guest_agent.rc == 0
+
+    - name: Assert the guest agent answered when the snapshot supports it
+      ansible.builtin.assert:
+        that:
+          - not (e2e_guest_agent_available | bool) or (e2e_guest_agent.rc | int == 0)
+        fail_msg: >-
+          The restored clone supports the QEMU guest agent (qemu-ga was found
+          and wired during boot), but the agent did not answer guest-ping over
+          the {{ e2e_guest_agent_channel }} channel while the domain was
+          running. stdout: {{ e2e_guest_agent.stdout | default('') }} stderr:
+          {{ e2e_guest_agent.stderr | default('') }}
         quiet: true
 
     - name: Stop the VM before inspecting guest evidence

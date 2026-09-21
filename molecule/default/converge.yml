@@ -441,6 +441,74 @@
         fail_msg: "Boot role tests failed"
         success_msg: "Boot role Tier 1 tests passed"
 
+    - name: Boot role - guest agent wiring detects and enables a supported clone
+      block:
+        - name: Create a synthetic clone root with a QEMU guest agent
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ fixture_root }}/clone-root"
+            - "{{ fixture_root }}/clone-root/usr/bin"
+            - "{{ fixture_root }}/clone-root/usr/lib/systemd/system"
+
+        - name: Seed a fake qemu-ga binary in the clone
+          ansible.builtin.copy:
+            content: "#!/bin/sh\nexit 0\n"
+            dest: "{{ fixture_root }}/clone-root/usr/bin/qemu-ga"
+            mode: "0755"
+
+        - name: Seed the qemu-guest-agent service unit in the clone
+          ansible.builtin.copy:
+            content: |
+              [Unit]
+              Description=QEMU Guest Agent
+
+              [Service]
+              ExecStart=/usr/bin/qemu-ga
+
+              [Install]
+              WantedBy=multi-user.target
+            dest: "{{ fixture_root }}/clone-root/usr/lib/systemd/system/qemu-guest-agent.service"
+            mode: "0644"
+
+        - name: Wire the QEMU guest agent on the supported clone
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../../roles/boot/tasks/guest_agent.yml"
+          vars:
+            boot_restored_root: "{{ fixture_root }}/clone-root"
+
+        - name: Inspect the enabled guest agent service symlink
+          ansible.builtin.stat:
+            path: "{{ fixture_root }}/clone-root/etc/systemd/system/multi-user.target.wants/qemu-guest-agent.service"
+            follow: false
+          register: tier1_guest_agent_wants
+
+        - name: Assert the supported clone published and enabled the agent
+          ansible.builtin.assert:
+            that:
+              - boot_guest_agent_available | bool
+              - tier1_guest_agent_wants.stat.islnk
+              - "'qemu-guest-agent.service' in (tier1_guest_agent_wants.stat.lnk_target | default(''))"
+            fail_msg: "The supported clone did not publish or enable the guest agent"
+            success_msg: "Guest agent wiring detected and enabled the supported clone"
+
+    - name: Boot role - guest agent wiring skips a clone without the agent
+      block:
+        - name: Wire the QEMU guest agent on a clone without the agent
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../../roles/boot/tasks/guest_agent.yml"
+          vars:
+            boot_restored_root: "{{ fixture_root }}"
+
+        - name: Assert the unsupported clone is skipped cleanly
+          ansible.builtin.assert:
+            that:
+              - not (boot_guest_agent_available | bool)
+            fail_msg: "The clone without qemu-ga was reported as supporting the agent"
+            success_msg: "Guest agent wiring skipped the unsupported clone"
+
     - name: Libvirt role - validate required facts are enforced
       block:
         - name: Run libvirt role with empty facts
