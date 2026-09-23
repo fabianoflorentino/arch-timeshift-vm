@@ -279,3 +279,13 @@
     - e2e_snapshot_capabilities.has_kernel | bool
     - e2e_snapshot_capabilities.has_grub_install | bool
     - e2e_snapshot_capabilities.has_mkinitcpio | bool
+
+- name: Compute a source manifest for integrity checks
+  ansible.builtin.command: sha256sum "{{ e2e_snapshot_dir }}/info.json"
+  register: snapshot_source_info_sha
+  changed_when: false
+
+- name: Publish the snapshot source manifest
+  ansible.builtin.set_fact:
+    e2e_snapshot_manifest: >-
+      {{ {'info.json': (snapshot_source_info_sha.stdout | split) | first} }}

@@ -64,7 +64,9 @@
         content: |
           {
             "type": "btrfs",
-            "subvolumes": {"@": [], "@home": []}
+            "subvolumes": {"@": [], "@home": []},
+            "created": "2020-01-02 03:04:05",
+            "hostname": "tier1-host"
           }
         dest: "{{ fixture_snapshot_dir }}/info.json"
         mode: "0644"

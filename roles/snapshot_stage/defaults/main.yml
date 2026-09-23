@@ -7,3 +7,4 @@ snapshot_stage_required_commands:
   - btrfs
   - findmnt
   - realpath
+  - sha256sum

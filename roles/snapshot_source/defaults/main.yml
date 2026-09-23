@@ -13,3 +13,4 @@ snapshot_source_required_commands:
   - find
   - realpath
   - stat
+  - sha256sum

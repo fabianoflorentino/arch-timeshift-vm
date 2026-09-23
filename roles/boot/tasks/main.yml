@@ -273,6 +273,24 @@
         quiet: true
       when: boot_install_grub | bool
 
+    - name: Record a SHA-256 manifest of the seeded kernel payloads  # noqa command-instead-of-module
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {
+          echo "# arch-timeshift-vm boot manifest"
+          sha256sum "{{ boot_restored_root }}/boot/vmlinuz-linux"
+          if [ -f "{{ boot_restored_root }}/boot/initramfs-linux.img" ]; then
+            sha256sum "{{ boot_restored_root }}/boot/initramfs-linux.img"
+          fi
+          if [ -f "{{ boot_restored_root }}/boot/EFI/Linux/arch-linux.efi" ]; then
+            sha256sum "{{ boot_restored_root }}/boot/EFI/Linux/arch-linux.efi"
+          fi
+        } > "{{ work_dir }}/manifest-boot.sha256"
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: boot_install_grub | bool
+
   always:
     - name: Unmount chroot API filesystems
       ansible.builtin.command:

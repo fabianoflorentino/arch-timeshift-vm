@@ -171,6 +171,21 @@
       BTRFS snapshot listing the @ and @home subvolumes.
     quiet: true
 
+- name: Assert the snapshot declares provenance metadata
+  ansible.builtin.assert:
+    that:
+      - snapshot_info['created'] | default('') | length > 0
+      - snapshot_info['hostname'] | default('') | length > 0
+    fail_msg: >-
+      Snapshot {{ resolved_snapshot }} is missing provenance in info.json
+      (created and/or hostname). Refuse snapshots of unknown origin.
+    quiet: true
+
+- name: Record snapshot provenance facts
+  ansible.builtin.set_fact:
+    snapshot_meta_created: "{{ snapshot_info['created'] | default('') }}"
+    snapshot_meta_hostname: "{{ snapshot_info['hostname'] | default('') }}"
+
 - name: Detect the filesystem type of the snapshot root
   ansible.builtin.command:
     cmd: "stat --file-system --format=%T {{ snapshot_root_dir }}"
@@ -276,5 +291,6 @@
       - "Snapshot      : {{ resolved_snapshot }}"
       - "Root subvolume: {{ snapshot_root }}"
       - "Home subvolume: {{ snapshot_home }}"
+      - "Provenance    : created={{ snapshot_meta_created }} host={{ snapshot_meta_hostname }}"
       - "VM disk       : {{ vm_disk_real }}"
       - "Free space    : {{ vm_disk_avail_cmd.stdout | trim }} bytes"

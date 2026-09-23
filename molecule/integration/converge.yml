@@ -196,7 +196,9 @@
             content: |
               {
                 "type": "btrfs",
-                "subvolumes": {"@": [], "@home": []}
+                "subvolumes": {"@": [], "@home": []},
+                "created": "2020-01-02 03:04:05",
+                "hostname": "tier2-host"
               }
             dest: "{{ tier2_snapshot_dir }}/info.json"
             mode: "0644"
