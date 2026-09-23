@@ -27,3 +27,8 @@
   ansible.builtin.file:
     path: "{{ work_dir }}/{{ vm_name }}.xml"
     state: absent
+
+- name: Remove the generated isolated network definition
+  ansible.builtin.file:
+    path: "{{ work_dir }}/isolated-network.xml"
+    state: absent

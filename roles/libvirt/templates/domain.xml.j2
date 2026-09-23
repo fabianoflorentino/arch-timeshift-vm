@@ -62,10 +62,12 @@
     <controller type="usb" model="qemu-xhci" ports="15"/>
     <controller type="pci" index="0" model="pci-root"/>
 
+    {% if (vm_network_mode | default('isolated')) != 'none' %}
     <interface type="network">
-      <source network="{{ network_name }}"/>
+      <source network="{{ libvirt_interface_network | default(network_name) }}"/>
       <model type="virtio"/>
     </interface>
+{% endif %}
 
     <serial type="pty">
       <target type="isa-serial" port="0">

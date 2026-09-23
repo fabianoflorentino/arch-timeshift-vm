@@ -25,6 +25,10 @@ snapshot: latest
 efi_size_mib: 1024
 
 # VM networking
+# isolated (default): no NAT, no external access; 'default': NAT network;
+# 'none': no NIC at all.
+vm_network_mode: isolated
+libvirt_network_isolated_name: virbr-arch-timeshift-vm
 network_name: default
 
 # Optional: leave the ISO attached for rescue. VM still boots from disk first.

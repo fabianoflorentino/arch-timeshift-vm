@@ -556,6 +556,8 @@
             vm_vcpus: 2
             vm_disk: /tmp/render-test.qcow2
             network_name: default
+            vm_network_mode: isolated
+            libvirt_interface_network: virbr-arch-timeshift-vm
             arch_iso: /tmp/nonexistent.iso
             ovmf_code: /usr/share/edk2/x64/OVMF_CODE.4m.fd
             nvram_file: /tmp/render-test_VARS.fd
@@ -584,6 +586,7 @@
               - "vm_name in (tier1_xml_noiso.content | b64decode)"
               - "vm_disk in (tier1_xml_noiso.content | b64decode)"
               - "'machine=' not in (tier1_xml_noiso.content | b64decode)"
+              - "'network=\"virbr-arch-timeshift-vm\"' in (tier1_xml_noiso.content | b64decode)"
             fail_msg: "XML without ISO did not render correctly"
 
     - name: Libvirt role - template renders with ISO
@@ -659,6 +662,31 @@
               - "'gl enable=\"yes\"' in (tier1_xml_gl.content | b64decode)"
               - "'rendernode' in (tier1_xml_gl.content | b64decode)"
             fail_msg: "GL XML did not include acceleration"
+
+    - name: Libvirt role - template renders without a NIC
+      block:
+        - name: Disable the VM network interface
+          ansible.builtin.set_fact:
+            vm_network_mode: none
+            libvirt_graphics: spice
+
+        - name: Render the domain XML without NIC
+          ansible.builtin.template:
+            src: "{{ playbook_dir }}/../../roles/libvirt/templates/domain.xml.j2"
+            dest: /tmp/tier1-domain-nonic.xml
+            mode: "0644"
+
+        - name: Read the NIC-less XML
+          ansible.builtin.slurp:
+            src: /tmp/tier1-domain-nonic.xml
+          register: tier1_xml_nonic
+
+        - name: Assert NIC-less XML omits the interface
+          ansible.builtin.assert:
+            that:
+              - "'<interface' not in (tier1_xml_nonic.content | b64decode)"
+              - "'<serial type=\"pty\">' in (tier1_xml_nonic.content | b64decode)"
+            fail_msg: "NIC-less XML still contained an interface"
 
     - name: Libvirt role - teardown is idempotent (no-op)
       block:

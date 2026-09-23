@@ -13,6 +13,14 @@
       vm_name, vm_disk, work_dir, vm_memory_mib, vm_vcpus, network_name.
     quiet: true
 
+- name: Validate the VM networking mode
+  ansible.builtin.assert:
+    that:
+      - (vm_network_mode | default('isolated')) in ['isolated', 'default', 'none']
+    fail_msg: >-
+      vm_network_mode must be one of 'isolated', 'default' or 'none'.
+    quiet: true
+
 - name: Define and start the libvirt domain
   block:
     - name: Ensure the NVRAM directory exists
@@ -61,12 +69,54 @@
         mode: "0644"
         force: true
 
-    - name: Ensure the default network is active
-      ansible.builtin.command:
-        cmd: virsh -c {{ libvirt_uri }} net-start {{ network_name }}
-      register: libvirt_net_start
-      changed_when: "'started' in libvirt_net_start.stdout"
-      failed_when: false
+    - name: Use the configured NAT network
+      ansible.builtin.set_fact:
+        libvirt_interface_network: "{{ network_name }}"
+      when: (vm_network_mode | default('isolated')) == 'default'
+
+    - name: Disable the VM network interface
+      ansible.builtin.set_fact:
+        libvirt_interface_network: ""
+      when: (vm_network_mode | default('isolated')) == 'none'
+
+    - name: Ensure the isolated network exists
+      when: (vm_network_mode | default('isolated')) == 'isolated'
+      block:
+        - name: Write the isolated network definition
+          ansible.builtin.template:
+            src: isolated-network.xml.j2
+            dest: "{{ work_dir }}/isolated-network.xml"
+            mode: "0644"
+
+        - name: List existing libvirt networks
+          ansible.builtin.command:
+            cmd: virsh -c {{ libvirt_uri }} net-list --all --name
+          register: libvirt_net_list
+          changed_when: false
+
+        - name: Define the isolated network when missing
+          ansible.builtin.command:
+            cmd: virsh -c {{ libvirt_uri }} net-define {{ work_dir }}/isolated-network.xml
+          changed_when: true
+          when: libvirt_network_isolated_name not in libvirt_net_list.stdout_lines
+
+        - name: Start the isolated network
+          ansible.builtin.command:
+            cmd: virsh -c {{ libvirt_uri }} net-start {{ libvirt_network_isolated_name }}
+          register: libvirt_isolated_net_start
+          changed_when: "'started' in libvirt_isolated_net_start.stdout"
+          failed_when: false
+
+        - name: Autostart the isolated network
+          ansible.builtin.command:
+            cmd: virsh -c {{ libvirt_uri }} net-autostart {{ libvirt_network_isolated_name }}
+          register: libvirt_isolated_net_autostart
+          changed_when: "'marked as autostarted' in libvirt_isolated_net_autostart.stdout"
+          failed_when: false
+
+        - name: Record the isolated network name
+          ansible.builtin.set_fact:
+            libvirt_interface_network: "{{ libvirt_network_isolated_name }}"
 
     - name: Undefine any pre-existing domain with the same name
       ansible.builtin.shell: |
@@ -133,7 +183,7 @@
           - "State: {{ libvirt_vm_state.stdout }}"
           - "Disk: {{ vm_disk }}"
           - "NVRAM: {{ nvram_file }}"
-          - "Network: {{ network_name }}"
+          - "Network: {{ libvirt_interface_network | default(network_name) }}"
 
   rescue:
     - name: Teardown on failure

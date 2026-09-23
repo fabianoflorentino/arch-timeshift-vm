@@ -14,4 +14,9 @@ libvirt_undefine_before: true
 
 libvirt_xml_validate: true
 
+# VM networking mode: isolated (no NAT, no external access) by default,
+# 'default' uses network_name (NAT), 'none' omits the NIC entirely.
+vm_network_mode: isolated
+libvirt_network_isolated_name: virbr-arch-timeshift-vm
+
 libvirt_allow_missing_virsh: false

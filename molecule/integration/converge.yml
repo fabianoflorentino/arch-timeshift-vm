@@ -21,6 +21,7 @@
     vm_memory_mib: 2048
     vm_vcpus: 2
     network_name: default
+    vm_network_mode: default
     timeshift_root: auto
     snapshot: latest
     vm_images_dir: "{{ tier2_images }}"

@@ -24,6 +24,7 @@
     vm_memory_mib: "{{ lookup('env', 'E2E_VM_MEMORY_MIB') | default('2048', true) }}"
     vm_vcpus: "{{ lookup('env', 'E2E_VM_VCPUS') | default('2', true) }}"
     network_name: "{{ lookup('env', 'E2E_NETWORK') | default('default', true) }}"
+    vm_network_mode: default
     libvirt_uri: qemu:///system
     libvirt_start: true
     libvirt_attach_iso: false
