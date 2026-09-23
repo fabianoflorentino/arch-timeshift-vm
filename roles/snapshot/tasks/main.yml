@@ -284,6 +284,59 @@
       {{ vm_disk_avail_cmd.stdout | trim or 'unknown' }}.
     quiet: true
 
+- name: Detect leftover state from a previous run
+  when: not (force_cleanup | default(false) | bool)
+  block:
+    - name: Look for a leftover temporary disk from a previous run
+      ansible.builtin.stat:
+        path: "{{ vm_disk_real }}.new"
+      register: snapshot_stale_new_disk
+
+    - name: List mounts whose target lives under the work directory
+      ansible.builtin.command:
+        cmd: findmnt --raw --noheadings --output TARGET
+      register: snapshot_stale_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Detect NBD devices still serving the VM disk  # noqa command-instead-of-module
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for nbd in /sys/block/nbd*; do
+          [ -e "$nbd/pid" ] || continue
+          pid=$(cat "$nbd/pid") || continue
+          if grep -q -- "{{ vm_disk_real }}" "/proc/$pid/cmdline" 2>/dev/null; then
+            echo "/dev/$(basename "$nbd")"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: snapshot_stale_nbd
+      changed_when: false
+      failed_when: false
+
+    - name: Compute the stale mounts and NBD devices
+      ansible.builtin.set_fact:
+        snapshot_stale_mount_list: >-
+          {{ snapshot_stale_mounts.stdout_lines | default([])
+             | select('search', work_dir) | list
+             if (work_dir | default('') | length) > 0 else [] }}
+        snapshot_stale_nbd_list: "{{ snapshot_stale_nbd.stdout_lines | default([]) }}"
+
+    - name: Refuse to run over leftover state from a previous run
+      ansible.builtin.assert:
+        that:
+          - not (snapshot_stale_new_disk.stat.exists | bool)
+          - (snapshot_stale_mount_list | length) == 0
+          - (snapshot_stale_nbd_list | length) == 0
+        fail_msg: >-
+          Leftover state found from a previous interrupted run (temporary
+          disk: {{ vm_disk_real }}.new; mounts: {{ snapshot_stale_mount_list | join(', ') }};
+          NBD devices: {{ snapshot_stale_nbd_list | join(', ') }}). Run
+          `arch-timeshift-vm cleanup` (or pass -e force_cleanup=true) to remove
+          it before restoring again.
+        quiet: true
+
 - name: Report the resolved preflight
   ansible.builtin.debug:
     msg:
