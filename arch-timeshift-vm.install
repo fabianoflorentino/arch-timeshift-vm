@@ -1,0 +1,12 @@
+post_install() {
+  echo "arch-timeshift-vm installed."
+  echo
+  echo "  sudo /usr/bin/arch-timeshift-vm install   # provision venv + collections"
+  echo "  arch-timeshift-vm init                    # create ~/.config config"
+  echo "  arch-timeshift-vm preflight -e confirm_restore=true"
+  echo "  arch-timeshift-vm restore -e confirm_restore=true"
+  echo
+  echo "Security: the sudoers fragment (sudoers/arch-timeshift-vm) is not"
+  echo "installed automatically; review and install it if you want"
+  echo "passwordless elevation scoped to the wrapper."
+}

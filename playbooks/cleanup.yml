@@ -1,0 +1,19 @@
+---
+# Clean up a restore VM: stop/undefine the domain, remove the NVRAM and the
+# generated XML, unmount leftover mounts, disconnect NBD devices and remove
+# the VM disk. Never removes directories above work_dir or the Timeshift
+# snapshots themselves.
+- name: Clean up a restore VM and its leftover state
+  hosts: localhost
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: e2e_cleanup
+      vars:
+        e2e_cleanup_work_dir: "{{ work_dir }}"
+        e2e_cleanup_images_dir: "{{ vm_images_dir }}"
+        e2e_cleanup_vm_name: "{{ vm_name }}"
+        e2e_cleanup_stage_root: /var/tmp/arch-timeshift-vm-stage
+        e2e_cleanup_remove_stage: false
+        e2e_cleanup_remove_parent: false

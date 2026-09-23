@@ -1,0 +1,46 @@
+---
+# arch-timeshift-vm user configuration.
+#
+# Copy to /etc/arch-timeshift-vm/config.yml (system-wide) or
+# ~/.config/arch-timeshift-vm/config.yml (per user) with `arch-timeshift-vm
+# init`. Keys here override group_vars/all.yml; CLI -e flags override these.
+# Every key is optional - group_vars/all.yml provides safe defaults.
+
+# Safety gate: the pipeline refuses to run unless the operator passes
+# -e confirm_restore=true on the command line. Do not set true here.
+confirm_restore: false
+
+vm_name: archlinux-timeshift
+vm_memory_mib: 4096
+vm_vcpus: 4
+
+vm_images_dir: /data/libvirt/images
+vm_disk: /data/libvirt/images/archlinux-timeshift.qcow2
+vm_disk_size: 120G
+
+# "auto" detects the real Timeshift snapshot directory (BTRFS top-level).
+timeshift_root: auto
+work_dir: /data/timeshift-vm-work
+nvram_dir: /var/lib/libvirt/qemu/nvram
+
+# "latest" or an exact Timeshift snapshot directory name.
+snapshot: latest
+
+efi_size_mib: 1024
+
+# VM networking: 'isolated' (default, no external access), 'default' (NAT),
+# or 'none' (no NIC).
+vm_network_mode: isolated
+libvirt_network_isolated_name: virbr-arch-timeshift-vm
+network_name: default
+
+# Optional: leave the ISO attached for rescue. VM still boots from disk first.
+arch_iso: /data/libvirt/iso/archlinux-x86_64.iso
+
+# Libvirt domain options
+libvirt_start: true
+libvirt_attach_iso: true
+libvirt_graphics: spice
+libvirt_gl_enable: false
+libvirt_spice_rendernode: /dev/dri/by-path/pci-0000:00:02.0-render
+libvirt_machine: ""

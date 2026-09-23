@@ -32,3 +32,4 @@ host_vars/
 
 # Run artifacts
 *.log
+/.logs/

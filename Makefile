@@ -92,6 +92,18 @@ clean-e2e: ## Remove E2E mounts, NBD devices and temporary artifacts
 >   "DOCKER_CONFIG=$(DOCKER_CONFIG)" "DOCKER_HOST=$(DOCKER_HOST)" \
 >   "$(CURDIR)/$(BIN)/molecule" cleanup -s e2e
 
+.PHONY: install
+install: ## Bootstrap venv + collections + sudoers + wrapper (root prompt)
+> ./scripts/arch-timeshift-vm install
+
+.PHONY: init-config
+init-config: ## Scaffold a user config at ~/.config/arch-timeshift-vm/config.yml
+> ./scripts/arch-timeshift-vm init
+
+.PHONY: container-build
+container-build: ## Build the standalone container runner (experimental, S13)
+> docker build -t arch-timeshift-vm:latest -f container/Containerfile .
+
 .PHONY: clean
 clean: ## Remove caches, docker config and molecule scratch
 > rm -rf .cache .docker molecule/*/.molecule

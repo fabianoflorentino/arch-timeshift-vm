@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# arch-timeshift-vm - standalone CLI over the Ansible restore pipeline.
+#
+# Subcommands:
+#   install    bootstrap the virtualenv, collections, sudoers and wrapper
+#   init       scaffold a user config at ~/.config/arch-timeshift-vm/config.yml
+#   restore    run the full restore pipeline (requires -e confirm_restore=true)
+#   plan       dry-run (--check --diff) of the restore pipeline
+#   preflight  run only the read-only validation phase
+#   cleanup    remove a restore VM, its disk and leftover mount state
+#   e2e        run the Tier 3 real-boot validation (make e2e)
+#   version    print the current version
+#
+# Config precedence: /etc/arch-timeshift-vm/config.yml ->
+# $XDG_CONFIG_HOME/arch-timeshift-vm/config.yml -> group_vars/all.yml.
+
+SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+PROJECT_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+VENV_DIR="$PROJECT_DIR/.venv"
+
+export ANSIBLE_CONFIG="$PROJECT_DIR/ansible.cfg"
+
+SYS_CFG=/etc/arch-timeshift-vm/config.yml
+USER_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/arch-timeshift-vm/config.yml"
+
+EXTRA_VARS_FILE=""
+for cfg in "$SYS_CFG" "$USER_CFG"; do
+  if [ -f "$cfg" ]; then
+    EXTRA_VARS_FILE="$cfg"
+    break
+  fi
+done
+
+LOG_DIR="$PROJECT_DIR/.logs"
+mkdir -p "$LOG_DIR"
+RUN_TS="$(date +%Y%m%d-%H%M%S)"
+
+CMD="${1:-help}"
+ARGS=()
+shift || true
+ARGS=("$@")
+
+confirm_granted() {
+  for arg in "$@"; do
+    case "$arg" in
+      *confirm_restore=true*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+require_confirm() {
+  if ! confirm_granted "$@"; then
+    echo "arch-timeshift-vm: safety gate - pass -e confirm_restore=true to proceed." >&2
+    exit 2
+  fi
+}
+
+venv_or_die() {
+  if [ ! -x "$VENV_DIR/bin/ansible-playbook" ]; then
+    echo "arch-timeshift-vm: virtualenv is not provisioned. Run 'arch-timeshift-vm install' first." >&2
+    exit 2
+  fi
+}
+
+run_ansible() {
+  local playbook="$1"
+  shift
+  venv_or_die
+  cd "$PROJECT_DIR"
+
+  local ansible_args=()
+  if [ -n "$EXTRA_VARS_FILE" ]; then
+    ansible_args+=(--extra-vars "@$EXTRA_VARS_FILE")
+  fi
+  ansible_args+=("$@")
+  ansible_args+=("$playbook")
+
+  local env_args=(
+    "PATH=$VENV_DIR/bin:$PATH"
+    "ANSIBLE_PYTHON_INTERPRETER=$VENV_DIR/bin/python"
+    "ANSIBLE_CONFIG=$PROJECT_DIR/ansible.cfg"
+    "ANSIBLE_LOG_PATH=$LOG_DIR/$CMD-$RUN_TS.log"
+  )
+
+  if [ "$(id -u)" -ne 0 ]; then
+    exec sudo -E env "${env_args[@]}" "$VENV_DIR/bin/ansible-playbook" "${ansible_args[@]}"
+  else
+    exec env "${env_args[@]}" "$VENV_DIR/bin/ansible-playbook" "${ansible_args[@]}"
+  fi
+}
+
+with_lock() {
+  local lock="/tmp/arch-timeshift-vm-$(id -u).lock"
+  exec 9>"$lock"
+  if ! flock -n 9; then
+    echo "arch-timeshift-vm: another run is already in progress on this host." >&2
+    exit 4
+  fi
+  "$@"
+}
+
+cmd_restore() {
+  require_confirm "$@"
+  with_lock run_ansible playbooks/restore.yml "$@"
+}
+
+cmd_plan() {
+  require_confirm "$@"
+  run_ansible playbooks/restore.yml --check --diff "$@"
+}
+
+cmd_preflight() {
+  require_confirm "$@"
+  run_ansible playbooks/preflight.yml "$@"
+}
+
+cmd_cleanup() {
+  require_confirm "$@"
+  with_lock run_ansible playbooks/cleanup.yml "$@"
+}
+
+cmd_e2e() {
+  venv_or_die
+  exec make -C "$PROJECT_DIR" e2e "$@"
+}
+
+cmd_install() {
+  local with_sudoers=true
+  for arg in "${ARGS[@]}"; do
+    case "$arg" in
+      --no-sudoers) with_sudoers=false ;;
+      *)
+        echo "arch-timeshift-vm install: unknown argument '$arg'." >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "arch-timeshift-vm install: python3 is required." >&2
+    exit 1
+  fi
+
+  python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip -q
+  "$VENV_DIR/bin/pip" install -r "$PROJECT_DIR"/requirements-dev.txt -q
+  (cd "$PROJECT_DIR" && "$VENV_DIR/bin/ansible-galaxy" collection install -r requirements.yml)
+
+  if $with_sudoers; then
+    cp "$PROJECT_DIR/sudoers/arch-timeshift-vm" "$PROJECT_DIR/.logs/sudoers.tmp"
+    chmod 0440 "$PROJECT_DIR/.logs/sudoers.tmp"
+    if [ "$(id -u)" -ne 0 ]; then
+      sudo visudo -c -f "$PROJECT_DIR/.logs/sudoers.tmp" >/dev/null
+      sudo install -m 0440 -o root -g root \
+        "$PROJECT_DIR/.logs/sudoers.tmp" /etc/sudoers.d/arch-timeshift-vm
+    else
+      visudo -c -f "$PROJECT_DIR/.logs/sudoers.tmp" >/dev/null
+      install -m 0440 -o root -g root \
+        "$PROJECT_DIR/.logs/sudoers.tmp" /etc/sudoers.d/arch-timeshift-vm
+    fi
+    rm -f "$PROJECT_DIR/.logs/sudoers.tmp"
+    echo "arch-timeshift-vm: sudoers installed at /etc/sudoers.d/arch-timeshift-vm."
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    sudo ln -sfn "$SELF" /usr/local/bin/arch-timeshift-vm
+  else
+    ln -sfn "$SELF" /usr/local/bin/arch-timeshift-vm
+  fi
+  echo "arch-timeshift-vm: installed at /usr/local/bin/arch-timeshift-vm."
+  echo "arch-timeshift-vm: run 'arch-timeshift-vm init' to create a config."
+}
+
+cmd_init() {
+  local dest
+  dest="${XDG_CONFIG_HOME:-$HOME/.config}/arch-timeshift-vm"
+  mkdir -p "$dest"
+  if [ -f "$dest/config.yml" ]; then
+    echo "arch-timeshift-vm init: config already exists at $dest/config.yml"
+    return 0
+  fi
+  cp "$PROJECT_DIR/config.example.yml" "$dest/config.yml"
+  echo "arch-timeshift-vm init: created $dest/config.yml"
+}
+
+cmd_version() {
+  if [ -d "$PROJECT_DIR/.git" ]; then
+    git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null ||
+      grep -m 1 '^## ' "$PROJECT_DIR/CHANGELOG.md" | sed 's/^## //'
+  else
+    grep -m 1 '^## ' "$PROJECT_DIR/CHANGELOG.md" | sed 's/^## //'
+  fi
+}
+
+cmd_help() {
+  cat <<'EOF'
+arch-timeshift-vm - restore an Arch Timeshift/BTRFS snapshot into a
+disposable bootable libvirt/KVM VM.
+
+Usage:
+  arch-timeshift-vm <command> [args...]
+
+Commands:
+  install [--no-sudoers]  bootstrap venv, collections, sudoers and wrapper
+  init                    scaffold ~/.config/arch-timeshift-vm/config.yml
+  restore -e confirm_restore=true   full restore pipeline
+  plan -e confirm_restore=true      dry-run (--check --diff)
+  preflight -e confirm_restore=true read-only validation phase
+  cleanup -e confirm_restore=true   remove VM, disk and leftover state
+  e2e                     Tier 3 real-boot validation (make e2e)
+  version                 print the current version
+  help                    show this help
+
+Config precedence: /etc/arch-timeshift-vm/config.yml, then
+${XDG_CONFIG_HOME:-~/.config}/arch-timeshift-vm/config.yml, then
+group_vars/all.yml. CLI -e flags always win. The restore/plan/preflight/
+cleanup commands require an explicit '-e confirm_restore=true' as a safety
+gate, even when configured.
+EOF
+}
+
+case "$CMD" in
+  restore) cmd_restore "${ARGS[@]}" ;;
+  plan) cmd_plan "${ARGS[@]}" ;;
+  preflight) cmd_preflight "${ARGS[@]}" ;;
+  cleanup) cmd_cleanup "${ARGS[@]}" ;;
+  e2e) cmd_e2e ;;
+  install) cmd_install ;;
+  init) cmd_init ;;
+  version) cmd_version ;;
+  help | --help | -h) cmd_help ;;
+  *)
+    echo "arch-timeshift-vm: unknown command '$CMD'." >&2
+    cmd_help >&2
+    exit 2
+    ;;
+esac

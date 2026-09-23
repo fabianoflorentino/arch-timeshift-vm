@@ -1,0 +1,11 @@
+# arch-timeshift-vm (Ansible local executor) - narrow passwordless elevation.
+#
+# The playbook escalates through Ansible become, which shells out as /bin/sh,
+# so per-binary Cmnd entries cannot match at the sudo layer. The safe surface
+# is therefore the wrapper itself: it validates every invocation (safety
+# gates, config, locks) before delegating to the playbook.
+#
+# Users in the wheel group may run the tool without a password prompt, while
+# every other sudo use keeps requiring authentication. Do NOT relax this to
+# NOPASSWD: ALL.
+%wheel ALL = NOPASSWD: /usr/local/bin/arch-timeshift-vm

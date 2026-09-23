@@ -10,3 +10,16 @@
     - restore
     - boot
     - libvirt
+
+  post_tasks:
+    - name: Emit the audit summary
+      when: resolved_snapshot is defined and resolved_snapshot | length > 0
+      ansible.builtin.debug:
+        msg:
+          - "Snapshot  : {{ resolved_snapshot }}"
+          - "Provenance: created={{ snapshot_meta_created | default('n/a') }}"
+          - "              host={{ snapshot_meta_hostname | default('n/a') }}"
+          - "VM        : {{ vm_name }}"
+          - "Disk      : {{ vm_disk_real | default(vm_disk) }}"
+          - "State     : {{ libvirt_vm_state.stdout | default('n/a') | trim }}"
+          - "Network   : {{ libvirt_interface_network | default(network_name) }}"

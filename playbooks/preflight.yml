@@ -1,0 +1,11 @@
+---
+# Preflight validation of the restore pipeline. Runs only the read-only
+# snapshot role: snapshot resolution, provenance, safety gates and free
+# space checks. Nothing is mutated on the host.
+- name: Preflight validation of the restore pipeline (read-only)
+  hosts: localhost
+  become: true
+  gather_facts: true
+
+  roles:
+    - snapshot
