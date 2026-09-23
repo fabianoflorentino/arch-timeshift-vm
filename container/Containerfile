@@ -1,0 +1,43 @@
+# Standalone container runner for arch-timeshift-vm (experimental, ROADMAP S13).
+#
+# Runs the whole restore pipeline without the host having qemu tools, btrfs
+# tools or libvirt installed. Requires a privileged container because the
+# pipeline touches NBD devices, mounts and the libvirt system socket:
+#
+#   podman run --privileged --rm \
+#     -v /dev:/dev -v /sys:/sys \
+#     -v /var/run/libvirt:/var/run/libvirt \
+#     -v <btrfs-top-mount>:/host-btrfs:ro   # Timeshift snapshots source
+#     -v /data/libvirt/images:/data/libvirt/images \
+#     -v /data/timeshift-vm-work:/data/timeshift-vm-work \
+#     arch-timeshift-vm:latest \
+#     restore -e confirm_restore=true -e timeshift_root=/host-btrfs/timeshift-btrfs/snapshots
+#
+# The host kernel module `nbd` must be loaded (modprobe nbd max_part=16).
+
+FROM archlinux:latest
+
+RUN pacman -Syu --noconfirm && \
+    pacman -S --noconfirm \
+      qemu-img qemu-block-rbd qemu \
+      libvirt edk2-ovmf \
+      btrfs-progs dosfstools gptfdisk \
+      arch-install-scripts \
+      util-linux coreutils \
+      python python-pip bash && \
+    pacman -Scc --noconfirm
+
+WORKDIR /opt/arch-timeshift-vm
+COPY . .
+
+RUN python -m venv .venv && \
+    .venv/bin/pip install --upgrade pip -q && \
+    .venv/bin/pip install -r requirements-dev.txt -q && \
+    .venv/bin/ansible-galaxy collection install -r requirements.yml && \
+    chmod +x scripts/arch-timeshift-vm && \
+    rm -rf /opt/arch-timeshift-vm/.venv/lib/python*/site-packages/ansible/_vendor
+
+ENV ANSIBLE_CONFIG=/opt/arch-timeshift-vm/ansible.cfg
+ENV PATH="/opt/arch-timeshift-vm/.venv/bin:$PATH"
+
+ENTRYPOINT ["/opt/arch-timeshift-vm/scripts/arch-timeshift-vm"]
