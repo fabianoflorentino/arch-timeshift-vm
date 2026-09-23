@@ -5,9 +5,11 @@ bootável e descartável, inteiramente no host - sem VirtioFS e sem ISO de
 instalação.
 
 > Status: fases 0-6 implementadas e validadas. Tier 1, Tier 2 e Tier 3 (boot
-> real com KVM aninhado) verdes. Veja [`docs/USAGE.md`](docs/USAGE.md) para o
-> guia operacional e [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) para a
-> arquitetura.
+> real com KVM aninhado) verdes. Endurecimento de produção (CLI, rede isolada,
+> crash recovery, proveniência, CI) implementado no nível de código. Veja
+> [`docs/USAGE.md`](docs/USAGE.md) para o guia operacional,
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) para a arquitetura e
+> [`docs/ROADMAP.md`](docs/ROADMAP.md) para o status do endurecimento.
 
 ## Como usar
 
@@ -37,6 +39,33 @@ flowchart LR
 Para o teste end-to-end (boot real com KVM aninhado), o fluxo também valida a
 fonte, copia o snapshot para um staging read-only e limpa tudo ao final —
 veja [`docs/USAGE.md`](docs/USAGE.md).
+
+## Instalação (standalone)
+
+Um único comando provisiona o virtualenv, as collections, o sudoers escopado
+e o wrapper no `/usr/local/bin`:
+
+```bash
+./scripts/arch-timeshift-vm install
+arch-timeshift-vm init      # cria ~/.config/arch-timeshift-vm/config.yml
+```
+
+Comandos (a rede da VM é isolada por padrão; o pipeline só roda com
+`-e confirm_restore=true` explícito):
+
+```bash
+arch-timeshift-vm preflight -e confirm_restore=true   # validação read-only
+arch-timeshift-vm plan -e confirm_restore=true        # dry-run (--check --diff)
+arch-timeshift-vm restore -e confirm_restore=true     # pipeline completo
+arch-timeshift-vm cleanup -e confirm_restore=true     # remove VM, disco e estado
+arch-timeshift-vm e2e                                 # boot real (Tier 3)
+```
+
+O wrapper resolve o `.venv` internamente, então não usa o `sudo
+ansible-playbook` manual nem sofre o problema de PATH do virtualenv. A
+configuração respeita a precedência `/etc/arch-timeshift-vm/config.yml`
+→ `~/.config/arch-timeshift-vm/config.yml` → `group_vars/all.yml`; flags `-e`
+sempre vencem. Veja [`docs/USAGE.md`](docs/USAGE.md).
 
 ## Como funciona
 
@@ -193,8 +222,15 @@ sudo "$(pwd)/.venv/bin/ansible-playbook" playbooks/prepare-e2e.yml \
 
 ## Uso
 
-Revise `group_vars/all.yml`. O playbook é destrutivo para o disco da VM
+Revise `group_vars/all.yml` (ou o config em `/etc/arch-timeshift-vm` /
+`~/.config/arch-timeshift-vm`). O playbook é destrutivo para o disco da VM
 nomeada e recusa executar até ser confirmado explicitamente:
+
+```bash
+arch-timeshift-vm restore -e confirm_restore=true
+```
+
+Equivalente direto com o ansible-playbook (só após `make venv deps`):
 
 ```bash
 sudo ansible-playbook playbooks/restore.yml -e confirm_restore=true
@@ -203,15 +239,13 @@ sudo ansible-playbook playbooks/restore.yml -e confirm_restore=true
 Snapshot específico:
 
 ```bash
-sudo ansible-playbook playbooks/restore.yml \
-  -e confirm_restore=true -e snapshot=2026-09-16_13-00-00
+arch-timeshift-vm restore -e confirm_restore=true -e snapshot=2026-09-16_13-00-00
 ```
 
 Outra VM:
 
 ```bash
-sudo ansible-playbook playbooks/restore.yml \
-  -e confirm_restore=true -e vm_name=archlinux-timeshift-test
+arch-timeshift-vm restore -e confirm_restore=true -e vm_name=archlinux-timeshift-test
 ```
 
 ## Testes
@@ -236,12 +270,21 @@ reais apenas como fonte, via cópia de staging read-only em `/var/tmp`. Veja
 
 ## Segurança
 
-- `confirm_restore: false` por padrão.
+- `confirm_restore: false` por padrão; `restore`/`plan`/`preflight`/`cleanup`
+  exigem `-e confirm_restore=true` explícito, mesmo configurado.
 - `timeshift_root: auto` detecta o subvolume topo do BTRFS e o diretório real
   de snapshots; dispensa caminhos fixos.
 - `vm_disk` é canonicalizado e validado contra `vm_images_dir` antes de
   qualquer remoção, com checagem de espaço livre.
+- Redes **todos os hosts do libvirt da VM são isoladas por padrão**
+  (`vm_network_mode: isolated`): sem NAT, sem saída externa.
+- Proveniência do snapshot exigida (`info.json` com `created`/`hostname`) e
+  manifest sha256 dos payloads de boot semeados (audit/anti-tamper).
+- Recusa rodar sobre estado sujo de execução anterior (mounts, NBD, qcow2
+  `.new`) e bloqueia execuções concorrentes com `flock`.
 - O `/etc/fstab` do host nunca é modificado (mounts efêmeros).
+- Sudo escalonado opcional restrito ao wrapper
+  (`sudoers/arch-timeshift-vm`, instalável via `arch-timeshift-vm install`).
 - Cleanup automático em caso de falha.
 
 ## Estrutura
@@ -249,17 +292,21 @@ reais apenas como fonte, via cópia de staging read-only em `/var/tmp`. Veja
 ```
 ansible.cfg
 requirements.yml / requirements-dev.txt
+config.example.yml
 Makefile
-LICENSE
+LICENSE / PKGBUILD
 CHANGELOG.md / CONTRIBUTING.md
-docs/{ARCHITECTURE,USAGE,SAFETY,TROUBLESHOOTING}.md
+docs/{ARCHITECTURE,USAGE,SAFETY,TROUBLESHOOTING,ROADMAP}.md
 group_vars/all.yml
 inventory/localhost.yml
-playbooks/{restore,prepare-e2e}.yml
+playbooks/{restore,preflight,cleanup,prepare-e2e}.yml
 roles/{snapshot,disk,restore,boot,libvirt}/
 roles/{snapshot_source,snapshot_stage,e2e_preflight,e2e_cleanup}/
 molecule/{default,integration,e2e}/
-scripts/
+sudoers/arch-timeshift-vm
+scripts/{arch-timeshift-vm,check.sh,test-env.sh}
+container/Containerfile
+.github/workflows/{ci,release}.yml
 ```
 
 ## Licença

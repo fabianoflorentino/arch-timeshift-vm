@@ -3,9 +3,30 @@
 ## Validação antes da execução
 
 O fluxo destrói e recria somente o disco indicado por `vm_disk`, mas inicia
-com `confirm_restore: false`. Revise `group_vars/all.yml`, confirme que
+com `confirm_restore: false`. Revise `group_vars/all.yml` (ou a config em
+`/etc/arch-timeshift-vm` / `~/.config/arch-timeshift-vm`), confirme que
 `vm_disk` está dentro de `vm_images_dir` e valide que o snapshot escolhido é
 descartável.
+
+## CLI standalone
+
+O wrapper `arch-timeshift-vm` resolve o venv, as collections e o PATH
+internamente — não sofre o problema de PATH do `sudo ansible-playbook`
+documentado abaixo — e aplica `flock` contra execuções concorrentes:
+
+```bash
+./scripts/arch-timeshift-vm install          # venv + collections + sudoers + wrapper
+arch-timeshift-vm init                       # cria ~/.config/arch-timeshift-vm/config.yml
+arch-timeshift-vm preflight -e confirm_restore=true
+arch-timeshift-vm plan -e confirm_restore=true
+arch-timeshift-vm restore -e confirm_restore=true
+arch-timeshift-vm cleanup -e confirm_restore=true
+```
+
+A config segue a precedência `/etc/arch-timeshift-vm/config.yml` →
+`~/.config/arch-timeshift-vm/config.yml` → `group_vars/all.yml`; flags `-e`
+sempre vencem. `restore`/`plan`/`preflight`/`cleanup` exigem o
+`-e confirm_restore=true` explícito como porta de segurança.
 
 ## Execução normal
 

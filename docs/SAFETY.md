@@ -6,7 +6,9 @@ confirmações exigidas e os limites de mutação de cada comando.
 ## Princípios
 
 - `confirm_restore: false` por padrão: `playbooks/restore.yml` recusa executar
-  sem `-e confirm_restore=true`.
+  sem `-e confirm_restore=true`. O CLI `arch-timeshift-vm` exige o flag
+  explícito para `restore`, `plan`, `preflight` e `cleanup`, mesmo quando o
+  valor está em um arquivo de config.
 - O modo somente leitura (`confirm_restore=false`) e o `--check` nunca mutam o
   host.
 - Todo caminho destrutivo é canonicalizado e validado **antes** de qualquer
@@ -18,6 +20,16 @@ confirmações exigidas e os limites de mutação de cada comando.
   cópias de staging read-only.
 - `cleanup`/teardown roda sempre, inclusive em falha
   (`block/rescue/always`).
+- Rede da VM isolada por padrão: `vm_network_mode: isolated` (sem NAT, sem
+  saída externa); `default` e `none` são escolhas explícitas.
+- Recusa rodar sobre estado sujo deixado por uma execução interrompida:
+  mounts sob `work_dir`, NBD servindo o disco, ou `qcow2.new` órfão.
+- Proveniência do snapshot exigida (`info.json` com `created` e `hostname`) e
+  manifest sha256 dos payloads de boot semeados na ESP.
+- Execuções concorrentes são bloqueadas por `flock` no wrapper.
+- Sudo escalonado opcional restrito ao wrapper (`sudoers/arch-timeshift-vm`):
+  o playbook escalona via `/bin/sh` do Ansible, então permissões por binário
+  não casam; o contorno seguro é autorizar sem senha somente o wrapper.
 
 ## Operações destrutivas e confirmações
 
@@ -28,6 +40,7 @@ confirmações exigidas e os limites de mutação de cada comando.
 | Criar um snapshot Timeshift novo | `playbooks/prepare-e2e.yml` | `snapshot_source_create=true` **e** `snapshot_source_create_confirm=true` | instala o snapshot usando o `timeshift`; nunca apaga snapshots existentes |
 | Preparar a rede libvirt padrão | `prepare-e2e.yml` | `e2e_preflight_prepare_network=true` | define/habilita/inicia a rede em `/etc/libvirt/qemu/networks/<name>.xml` |
 | Remover artefatos E2E | `make clean-e2e` / `e2e_cleanup` | opcional (comando explícito) | somente `/var/tmp/arch-timeshift-vm-e2e`, `/var/tmp/arch-timeshift-vm-stage` e o domínio `e2e_vm_name` |
+| Remover VM restaurada e estado | `arch-timeshift-vm cleanup` / `playbooks/cleanup.yml` | `confirm_restore=true` | domínio `vm_name`, NVRAM/XML sob `work_dir`, disco `vm_disk` e mounts/NBD órfãos sob `work_dir` |
 
 ## Garantias do E2E
 

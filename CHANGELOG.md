@@ -3,7 +3,49 @@
 Todas as mudanças notáveis por versão.
 
 As versões seguem as fases de desenvolvimento do projeto (Fase 0-6) e suas
-melhorias (ex.: Fase 6.1).
+melhorias (ex.: Fase 6.1, Fase 6.2).
+
+## Fase 6.2 - Endurecimento de produção (2026-09-23)
+
+Endurece a ferramenta para uso standalone e produção: CLI, segurança por
+default, crash recovery, proveniência e CI.
+
+### Adicionado
+
+- CLI `scripts/arch-timeshift-vm`: subcomandos `install`, `init`, `restore`,
+  `plan`, `preflight`, `cleanup`, `e2e`, `version`. Resolve venv/collections/
+  PATH/sudo, aplica `flock` contra concorrência, grava log de auditoria em
+  `.logs/` e exige `-e confirm_restore=true` explícito para comandos que
+  mutam. Config com precedência `/etc/arch-timeshift-vm/config.yml` →
+  `~/.config/arch-timeshift-vm/config.yml` → `group_vars/all.yml`.
+- Playbooks `preflight.yml` (validação read-only da fase 1) e `cleanup.yml`
+  (remove VM restaurada, disco e estado órfão sem tocar parentes de
+  `work_dir`).
+- Rede da VM **isolada por padrão** (`vm_network_mode: isolated`): sem NAT,
+  sem saída externa; `default` e `none` explícitos. Rede isolada definida e
+  autostartada pelo role `libvirt` quando ausente.
+- Crash recovery: o preflight recusa rodar sobre mounts sob `work_dir`, NBD
+  servindo o disco ou `qcow2.new` órfão (recuperável com `cleanup` ou
+  `-e force_cleanup=true`).
+- Proveniência: `info.json` deve declarar `created`/`hostname`; manifest
+  sha256 dos payloads de boot semeados em `work_dir/manifest-boot.sha256`.
+- Manifest sha256 da fonte E2E (`e2e_snapshot_manifest`) verificado pelo
+  `snapshot_stage`.
+- sudoers escopado ao wrapper (`sudoers/arch-timeshift-vm`), instalável via
+  `arch-timeshift-vm install`; PKGBUILD + hook de instalação.
+- CI no repositório (`.github/workflows/`): lint + syntax + Tier 1 +
+  `pip-audit` + `trivy`; Tier 3 discreto em runner próprio; release draft em
+  tags `v*`.
+- Collecções pinadas exatas (`ansible.posix==2.2.2`) e runner em container
+  experimental (`container/Containerfile`, S13).
+- `docs/ROADMAP.md` documenta os itens implementados e pendentes.
+
+### Alterado
+
+- Group vars e documentação (README, USAGE, SAFETY) refletem o novo default
+  de rede isolada, o CLI e os gatilhos de segurança.
+- Fixtures de teste (`molecule/*/converge.yml`) incluem proveniência em
+  `info.json` e preservam NAT explícito no Tier 2/3.
 
 ## Fase 6.1 - Evidência de saúde do guest via QEMU guest agent (2026-09-21)
 
