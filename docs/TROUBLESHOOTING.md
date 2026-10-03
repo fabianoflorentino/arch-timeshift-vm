@@ -4,6 +4,29 @@ Diagnóstico das falhas mais comuns, por área.
 
 ## Snapshot
 
+### "Timeshift snapshot root ... does not exist"
+
+With `timeshift_root: auto`, the snapshot role selects the BTRFS top-level
+mount for the root filesystem (or `timeshift_device`, if set) and expects the
+Timeshift directory at `<top-level mount>/timeshift-btrfs/snapshots`. If no
+matching top-level mount is already present, the restore playbook mounts it
+temporarily at `/run/arch-timeshift-vm/btrfs-top` and releases it after the
+pipeline, including on failure. Check which BTRFS filesystems and top-level
+mounts are available:
+
+```bash
+findmnt --types btrfs --output SOURCE,TARGET,FSROOT
+sudo mkdir -p /mnt/btrfs-top
+sudo mount -o subvolid=5 /dev/<snapshot-device> /mnt/btrfs-top
+ls -la /mnt/btrfs-top/timeshift-btrfs/snapshots
+```
+
+If the snapshots are on a different BTRFS filesystem, set
+`timeshift_device` to that filesystem's source so the playbook mounts the
+correct top-level. For a nonstandard snapshot location, set `timeshift_root`
+directly to its `snapshots` directory. The manual mount above is only for
+diagnosis; replace the placeholder with the actual snapshot device.
+
 ### "Snapshot 'X' was not found under ..."
 
 `snapshot_source_name` não corresponde a nenhum diretório sob
