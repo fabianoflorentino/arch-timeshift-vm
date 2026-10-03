@@ -187,7 +187,7 @@
               - snapshot_top_mount == '/mnt/btrfs-top'
             fail_msg: "Mount selector returned '{{ snapshot_top_mount }}'"
 
-    - name: Negative - the selector aborts when no top-level mount exists
+    - name: Unit - the selector returns empty when no matching top-level is mounted
       block:
         - name: Seed findmnt output without a top-level mount for the device
           ansible.builtin.set_fact:
@@ -200,13 +200,11 @@
           ansible.builtin.include_tasks: >-
             {{ playbook_dir }}/../../roles/snapshot/tasks/select_btrfs_top_mount.yml
 
-        - name: Record a failed selector guard
-          ansible.builtin.set_fact:
-            tier1_selector_guard: false
-      rescue:
-        - name: Record a successful selector guard
-          ansible.builtin.set_fact:
-            tier1_selector_guard: true
+        - name: Assert the selector reports no matching top-level
+          ansible.builtin.assert:
+            that:
+              - snapshot_top_mount | length == 0
+            fail_msg: "Mount selector should return empty when no top-level is mounted"
 
     - name: Negative - confirm_restore=false must abort
       block:

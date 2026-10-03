@@ -1,5 +1,5 @@
 ---
-- name: Converge - Tier 2 synthetic BTRFS snapshot detection (read-only role)
+- name: Converge - Tier 2 synthetic BTRFS snapshot detection
   hosts: all
   become: false
   gather_facts: false
@@ -10,6 +10,7 @@
     tier2_sandbox: /tmp/arch-timeshift-vm-tier2
     tier2_image: "{{ tier2_sandbox }}/btrfs.img"
     tier2_mount: "{{ tier2_sandbox }}/top"
+    snapshot_top_mount_point: "{{ tier2_mount }}"
     tier2_snapshots: "{{ tier2_mount }}/timeshift-btrfs/snapshots"
     tier2_snapshot_name: "2020-01-02_03-04-05"
     tier2_snapshot_dir: "{{ tier2_snapshots }}/{{ tier2_snapshot_name }}"
@@ -208,6 +209,13 @@
           ansible.builtin.set_fact:
             timeshift_device: "{{ tier2_loop.stdout | trim }}"
 
+        - name: Unmount the synthetic top-level to exercise automatic mounting
+          ansible.builtin.command:
+            argv:
+              - umount
+              - "{{ tier2_mount }}"
+          changed_when: true
+
         - name: Run the snapshot role
           ansible.builtin.include_role:
             name: snapshot
@@ -220,6 +228,7 @@
               - snapshot_root == tier2_snapshot_dir + '/@'
               - snapshot_home == tier2_snapshot_dir + '/@home'
               - vm_disk_real == tier2_images + '/vm.qcow2'
+              - snapshot_top_mount_owned | bool
             fail_msg: "Synthetic BTRFS detection/validation did not match"
             success_msg: >-
               Validated synthetic snapshot {{ resolved_snapshot }} at

@@ -1,34 +1,171 @@
 ---
-- name: Initialize snapshot mount lifecycle state
-  ansible.builtin.set_fact:
-    snapshot_top_mount_owned: false
-    snapshot_role_error: ""
-    snapshot_cleanup_error: ""
+# Resolve and validate the snapshot and the destructive VM disk path.
 
-- name: Resolve and validate the snapshot
-  block:
-    - name: Run snapshot preflight
-      ansible.builtin.include_tasks: resolve_and_validate.yml
-  rescue:
-    - name: Record the snapshot preflight failure
-      ansible.builtin.set_fact:
-        snapshot_role_error: >-
-          {{ ansible_failed_result.msg | default(ansible_failed_result | string) }}
-  always:
-    - name: Release the ephemeral BTRFS top-level after preflight failure
-      ansible.builtin.include_tasks: unmount_btrfs_top.yml
-      when: snapshot_role_error | length > 0
-
-- name: Report snapshot preflight or cleanup failures
+- name: Require explicit confirmation
   ansible.builtin.assert:
     that:
-      - snapshot_role_error | length == 0
-      - snapshot_cleanup_error | length == 0
+      - confirm_restore | default(false) | bool
     fail_msg: >-
-      {{ snapshot_role_error }}
-      {{ snapshot_cleanup_error }}
+      Refusing to run: this pipeline creates and overwrites a VM disk. Re-run
+      with -e confirm_restore=true only after reviewing group_vars/all.yml.
     quiet: true
-<<<<<<< HEAD
+
+- name: Validate vm_name
+  ansible.builtin.assert:
+    that:
+      - vm_name is defined
+      - vm_name | length > 0
+      - vm_name is match('^[A-Za-z0-9._-]+$')
+    fail_msg: "vm_name must be a non-empty name matching ^[A-Za-z0-9._-]+$"
+    quiet: true
+
+- name: Ensure required host commands are available
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - "command -v {{ item }}"
+  loop: "{{ snapshot_required_commands }}"
+  register: snapshot_command_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail with a single clear message when commands are missing
+  ansible.builtin.assert:
+    that:
+      - (snapshot_command_check.results | default([]) | rejectattr('rc', 'eq', 0) | length) == 0
+    fail_msg: >-
+      Missing required host commands:
+      {{ snapshot_command_check.results | default([]) | rejectattr('rc', 'eq', 0)
+         | map(attribute='item') | join(', ') }}. Install them before running
+      the restore.
+    quiet: true
+
+- name: Resolve the Timeshift snapshot root directory
+  when: timeshift_root | default('auto') == 'auto'
+  block:
+    - name: Find the root filesystem source
+      ansible.builtin.command:
+        cmd: findmnt --noheadings --output SOURCE --target /
+      register: snapshot_root_source
+      changed_when: false
+
+    - name: Determine the device that holds the snapshots
+      ansible.builtin.set_fact:
+        snapshot_device: >-
+          {{ timeshift_device
+             if (timeshift_device | default('') | length) > 0
+             else (snapshot_root_source.stdout | trim | regex_replace('\\[.*\\]$', '')) }}
+
+    - name: List all BTRFS mounts
+      ansible.builtin.command:
+        cmd: >-
+          findmnt --raw --noheadings --output SOURCE,TARGET,FSROOT
+          --types btrfs
+      register: snapshot_btrfs_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Select an existing BTRFS top-level mount
+      ansible.builtin.include_tasks: select_btrfs_top_mount.yml
+
+    - name: Prepare an ephemeral BTRFS top-level mount when needed
+      when: snapshot_top_mount | length == 0
+      block:
+        - name: Check whether the temporary mount point is already in use
+          ansible.builtin.command:
+            argv:
+              - findmnt
+              - --noheadings
+              - --output
+              - TARGET
+              - --mountpoint
+              - "{{ snapshot_top_mount_point }}"
+          register: snapshot_top_mountpoint_check
+          changed_when: false
+          failed_when: false
+
+        - name: Require an unused temporary mount point
+          ansible.builtin.assert:
+            that:
+              - snapshot_top_mountpoint_check.rc != 0
+            fail_msg: >-
+              Temporary BTRFS mount point '{{ snapshot_top_mount_point }}' is
+              already mounted, but it is not the top-level mount selected for
+              {{ snapshot_device }}. Unmount it or choose another
+              snapshot_top_mount_point.
+            quiet: true
+
+        - name: Create the temporary BTRFS mount point
+          ansible.builtin.file:
+            path: "{{ snapshot_top_mount_point }}"
+            state: directory
+            mode: "0755"
+
+        - name: Mount the BTRFS top-level temporarily  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - mount
+              - --types
+              - btrfs
+              - --options
+              - subvolid=5
+              - "{{ snapshot_device }}"
+              - "{{ snapshot_top_mount_point }}"
+          register: snapshot_top_mount_result
+          changed_when: true
+
+        - name: Record ownership of the temporary top-level mount
+          ansible.builtin.set_fact:
+            snapshot_top_mount_owned: true
+
+        - name: Refresh the BTRFS mount list after mounting the top-level
+          ansible.builtin.command:
+            cmd: >-
+              findmnt --raw --noheadings --output SOURCE,TARGET,FSROOT
+              --types btrfs
+          register: snapshot_btrfs_mounts
+          changed_when: false
+
+        - name: Select the newly mounted BTRFS top-level
+          ansible.builtin.include_tasks: select_btrfs_top_mount.yml
+
+    - name: Assert the BTRFS top-level mount was found
+      ansible.builtin.assert:
+        that:
+          - snapshot_top_mount | length > 0
+        fail_msg: >-
+          Could not find or mount a BTRFS top-level for {{ snapshot_device }}.
+          Check that the device is available and that the task has permission
+          to mount it.
+        quiet: true
+
+    - name: Derive the Timeshift snapshot root from the top-level mount
+      ansible.builtin.set_fact:
+        snapshot_root_dir: "{{ snapshot_top_mount }}/timeshift-btrfs/snapshots"
+
+- name: Use the explicitly configured Timeshift root directory
+  ansible.builtin.set_fact:
+    snapshot_root_dir: "{{ timeshift_root }}"
+  when: timeshift_root | default('auto') != 'auto'
+
+- name: Stat the Timeshift root directory
+  ansible.builtin.stat:
+    path: "{{ snapshot_root_dir }}"
+  register: snapshot_root_stat
+
+- name: Assert the Timeshift root directory exists
+  ansible.builtin.assert:
+    that:
+      - snapshot_root_stat.stat.exists
+      - snapshot_root_stat.stat.isdir
+    fail_msg: >-
+      Timeshift snapshot root '{{ snapshot_root_dir }}' does not exist. Mount
+      the BTRFS top-level containing the Timeshift snapshots, verify that it
+      has a timeshift-btrfs/snapshots directory, and check that
+      timeshift_device selects the filesystem that holds those snapshots.
+      Set timeshift_root explicitly when the snapshots are stored elsewhere.
+    quiet: true
 
 - name: List available snapshots
   ansible.builtin.find:
@@ -106,21 +243,6 @@
       Snapshot {{ resolved_snapshot }} has an invalid info.json: expected a
       BTRFS snapshot listing the @ and @home subvolumes.
     quiet: true
-
-- name: Assert the snapshot declares provenance metadata
-  ansible.builtin.assert:
-    that:
-      - snapshot_info['created'] | default('') | length > 0
-      - snapshot_info['hostname'] | default('') | length > 0
-    fail_msg: >-
-      Snapshot {{ resolved_snapshot }} is missing provenance in info.json
-      (created and/or hostname). Refuse snapshots of unknown origin.
-    quiet: true
-
-- name: Record snapshot provenance facts
-  ansible.builtin.set_fact:
-    snapshot_meta_created: "{{ snapshot_info['created'] | default('') }}"
-    snapshot_meta_hostname: "{{ snapshot_info['hostname'] | default('') }}"
 
 - name: Detect the filesystem type of the snapshot root
   ansible.builtin.command:
@@ -220,59 +342,6 @@
       {{ vm_disk_avail_cmd.stdout | trim or 'unknown' }}.
     quiet: true
 
-- name: Detect leftover state from a previous run
-  when: not (force_cleanup | default(false) | bool)
-  block:
-    - name: Look for a leftover temporary disk from a previous run
-      ansible.builtin.stat:
-        path: "{{ vm_disk_real }}.new"
-      register: snapshot_stale_new_disk
-
-    - name: List mounts whose target lives under the work directory
-      ansible.builtin.command:
-        cmd: findmnt --raw --noheadings --output TARGET
-      register: snapshot_stale_mounts
-      changed_when: false
-      failed_when: false
-
-    - name: Detect NBD devices still serving the VM disk  # noqa command-instead-of-module
-      ansible.builtin.shell: |
-        set -euo pipefail
-        for nbd in /sys/block/nbd*; do
-          [ -e "$nbd/pid" ] || continue
-          pid=$(cat "$nbd/pid") || continue
-          if grep -q -- "{{ vm_disk_real }}" "/proc/$pid/cmdline" 2>/dev/null; then
-            echo "/dev/$(basename "$nbd")"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: snapshot_stale_nbd
-      changed_when: false
-      failed_when: false
-
-    - name: Compute the stale mounts and NBD devices
-      ansible.builtin.set_fact:
-        snapshot_stale_mount_list: >-
-          {{ snapshot_stale_mounts.stdout_lines | default([])
-             | select('search', work_dir) | list
-             if (work_dir | default('') | length) > 0 else [] }}
-        snapshot_stale_nbd_list: "{{ snapshot_stale_nbd.stdout_lines | default([]) }}"
-
-    - name: Refuse to run over leftover state from a previous run
-      ansible.builtin.assert:
-        that:
-          - not (snapshot_stale_new_disk.stat.exists | bool)
-          - (snapshot_stale_mount_list | length) == 0
-          - (snapshot_stale_nbd_list | length) == 0
-        fail_msg: >-
-          Leftover state found from a previous interrupted run (temporary
-          disk: {{ vm_disk_real }}.new; mounts: {{ snapshot_stale_mount_list | join(', ') }};
-          NBD devices: {{ snapshot_stale_nbd_list | join(', ') }}). Run
-          `arch-timeshift-vm cleanup` (or pass -e force_cleanup=true) to remove
-          it before restoring again.
-        quiet: true
-
 - name: Report the resolved preflight
   ansible.builtin.debug:
     msg:
@@ -280,8 +349,5 @@
       - "Snapshot      : {{ resolved_snapshot }}"
       - "Root subvolume: {{ snapshot_root }}"
       - "Home subvolume: {{ snapshot_home }}"
-      - "Provenance    : created={{ snapshot_meta_created }} host={{ snapshot_meta_hostname }}"
       - "VM disk       : {{ vm_disk_real }}"
       - "Free space    : {{ vm_disk_avail_cmd.stdout | trim }} bytes"
-=======
->>>>>>> 045187e93ffb5e75af20470a4066bb56e7cf0bb0

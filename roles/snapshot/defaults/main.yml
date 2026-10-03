@@ -10,11 +10,16 @@ timeshift_root: auto
 # Mainly a test seam for synthetic BTRFS sandboxes.
 timeshift_device: ""
 
+# Temporary mount used when auto-detection finds no mounted BTRFS top-level.
+snapshot_top_mount_point: /run/arch-timeshift-vm/btrfs-top
+
 # Commands required by the full restore pipeline. Fail early with a single
 # clear message when any is missing.
 snapshot_required_commands:
   - btrfs
   - findmnt
+  - mount
+  - umount
   - realpath
   - qemu-img
   - qemu-nbd
