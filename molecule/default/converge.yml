@@ -271,11 +271,13 @@
           vars:
             timeshift_autodetect_mount_top: false
 
-        - name: Assert the selector reports no matching top-level
-          ansible.builtin.assert:
-            that:
-              - snapshot_top_mount | length == 0
-            fail_msg: "Mount selector should return empty when no top-level is mounted"
+        - name: Record a failed top-level guard
+          ansible.builtin.set_fact:
+            tier1_selector_guard: false
+      rescue:
+        - name: Record a successful top-level guard
+          ansible.builtin.set_fact:
+            tier1_selector_guard: true
 
     - name: Negative - the auto-mount fallback fails loudly on an unmountable device
       block:
