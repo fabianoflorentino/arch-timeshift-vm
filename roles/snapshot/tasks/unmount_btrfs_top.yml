@@ -1,0 +1,53 @@
+---
+- name: Check whether this role's temporary BTRFS mount is still mounted
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - SOURCE,FSROOT
+      - --mountpoint
+      - "{{ snapshot_top_mount_point }}"
+  register: snapshot_top_mount_status
+  changed_when: false
+  failed_when: false
+  when: snapshot_top_mount_owned | bool
+
+- name: Unmount the temporary BTRFS top-level
+  ansible.builtin.command:
+    argv:
+      - umount
+      - "{{ snapshot_top_mount_point }}"
+  register: snapshot_top_unmount_result
+  changed_when: snapshot_top_unmount_result.rc == 0
+  failed_when: false
+  when:
+    - snapshot_top_mount_owned | bool
+    - snapshot_top_mount_status.rc == 0
+    - snapshot_top_mount_status.stdout.split() | length > 1
+    - >-
+      (snapshot_top_mount_status.stdout.split()[0]
+       | regex_replace('\\[.*\\]$', '')) == snapshot_device
+    - snapshot_top_mount_status.stdout.split()[1] == '/'
+
+- name: Record a temporary mount cleanup failure
+  ansible.builtin.set_fact:
+    snapshot_cleanup_error: >-
+      Could not safely release temporary BTRFS mount
+      '{{ snapshot_top_mount_point }}'. Mount status:
+      {{ snapshot_top_mount_status.stdout | default('unavailable') }}.
+      Unmount result:
+      {{ snapshot_top_unmount_result.stderr | default('mount was not owned') }}.
+  when:
+    - snapshot_top_mount_owned | bool
+    - >-
+      (snapshot_top_mount_status.rc == 0 and
+       snapshot_top_mount_status.stdout.split() | length < 2) or
+      (snapshot_top_mount_status.stdout.split() | length > 1 and
+       snapshot_top_mount_status.stdout.split()[1] != '/') or
+      (snapshot_top_mount_status.stdout.split() | length > 0 and
+       (snapshot_top_mount_status.stdout.split()[0]
+        | regex_replace('\\[.*\\]$', '')) != snapshot_device) or
+      (snapshot_top_unmount_result.rc is defined and
+       snapshot_top_unmount_result.rc != 0)

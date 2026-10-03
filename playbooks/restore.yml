@@ -4,9 +4,50 @@
   become: true
   gather_facts: true
 
-  roles:
-    - snapshot
-    - disk
-    - restore
-    - boot
-    - libvirt
+  tasks:
+    - name: Initialize restore cleanup state
+      ansible.builtin.set_fact:
+        restore_pipeline_error: ""
+
+    - name: Run restore pipeline and always release a temporary snapshot mount
+      block:
+        - name: Run restore roles
+          block:
+            - name: Resolve and validate the snapshot
+              ansible.builtin.include_role:
+                name: snapshot
+
+            - name: Prepare the VM disk
+              ansible.builtin.include_role:
+                name: disk
+
+            - name: Restore snapshot contents
+              ansible.builtin.include_role:
+                name: restore
+
+            - name: Prepare the restored system to boot
+              ansible.builtin.include_role:
+                name: boot
+
+            - name: Define and optionally start the VM
+              ansible.builtin.include_role:
+                name: libvirt
+          rescue:
+            - name: Record the restore pipeline failure
+              ansible.builtin.set_fact:
+                restore_pipeline_error: >-
+                  {{ ansible_failed_result.msg
+                     | default(ansible_failed_result | string) }}
+      always:
+        - name: Release the ephemeral BTRFS top-level mount
+          ansible.builtin.include_tasks: ../roles/snapshot/tasks/unmount_btrfs_top.yml
+
+    - name: Report restore pipeline or snapshot mount cleanup failures
+      ansible.builtin.assert:
+        that:
+          - restore_pipeline_error | length == 0
+          - snapshot_cleanup_error | default('') | length == 0
+        fail_msg: >-
+          {{ restore_pipeline_error }}
+          {{ snapshot_cleanup_error | default('') }}
+        quiet: true
