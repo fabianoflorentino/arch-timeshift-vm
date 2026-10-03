@@ -16,6 +16,16 @@
     tier2_snapshot_dir: "{{ tier2_snapshots }}/{{ tier2_snapshot_name }}"
     tier2_images: "{{ tier2_sandbox }}/images"
 
+    # Second sandbox that mimics the reference host layout (`subvol=/@`): the
+    # filesystem default subvolume is not the top-level, so nothing exposes
+    # fsroot "/" and the auto-mount fallback has to do the work.
+    tier2b_image: "{{ tier2_sandbox }}/btrfs-subvol-root.img"
+    tier2b_mount: "{{ tier2_sandbox }}/subvol-root"
+    tier2b_snapshots: "{{ tier2b_mount }}/timeshift-btrfs/snapshots"
+    tier2b_snapshot_name: "2021-02-03_04-05-06"
+    tier2b_snapshot_dir: "{{ tier2b_snapshots }}/{{ tier2b_snapshot_name }}"
+    tier2b_top_mount_point: "{{ tier2_sandbox }}/auto-top"
+
     # Inputs consumed by the snapshot role, pointed at the sandbox.
     confirm_restore: true
     vm_name: tier2-test
@@ -44,6 +54,8 @@
     snapshot_required_commands:
       - btrfs
       - findmnt
+      - mount
+      - umount
       - realpath
       - qemu-img
       - qemu-nbd
@@ -67,7 +79,8 @@
       ansible.builtin.shell: |
         set -uo pipefail
         # Unmount leftovers from previous runs (nested -> outer)
-        for mp in {{ work_dir }}/mnt-root {{ work_dir }}/mnt {{ tier2_mount }}; do
+        for mp in {{ work_dir }}/mnt-root {{ work_dir }}/mnt {{ tier2_mount }} \
+                  {{ tier2b_mount }} {{ tier2b_top_mount_point }}; do
           while findmnt --mountpoint "$mp" >/dev/null 2>&1; do
             umount -R "$mp" 2>/dev/null || umount -lR "$mp" 2>/dev/null || break
           done
@@ -196,10 +209,14 @@
           ansible.builtin.copy:
             content: |
               {
+                "created": "1577934245",
+                "sys-uuid": "11111111-2222-3333-4444-555555555555",
+                "sys-distro": "Arch rolling",
+                "app-version": "26.09.0",
+                "tags": "daily",
+                "live": "false",
                 "type": "btrfs",
-                "subvolumes": {"@": [], "@home": []},
-                "created": "2020-01-02 03:04:05",
-                "hostname": "tier2-host"
+                "subvolumes": {"@": [], "@home": []}
               }
             dest: "{{ tier2_snapshot_dir }}/info.json"
             mode: "0644"
@@ -233,6 +250,458 @@
             success_msg: >-
               Validated synthetic snapshot {{ resolved_snapshot }} at
               {{ snapshot_root_dir }}
+
+    - name: Exercise auto-detection on a subvol=/@-style layout without a top-level mount
+      when: tier2_uid.stdout | trim == '0'
+      tags:
+        - molecule-idempotence-notest
+      block:
+        # This block re-runs the snapshot role against another filesystem and
+        # then releases its temporary mount, so the resolved facts it publishes
+        # must not leak into the blocks below (which restore from the layout
+        # built by the first block).
+        - name: Save the snapshot facts resolved by the first block
+          ansible.builtin.set_fact:
+            tier2_saved_snapshot_facts:
+              resolved_snapshot: "{{ resolved_snapshot }}"
+              snapshot_root_dir: "{{ snapshot_root_dir }}"
+              snapshot_dir: "{{ snapshot_dir }}"
+              snapshot_root: "{{ snapshot_root }}"
+              snapshot_home: "{{ snapshot_home }}"
+        # Reproduction of the reference host: the filesystem default subvolume
+        # is @root instead of the top-level (subvolid=5), so no mount exposes
+        # fsroot "/" and Timeshift's snapshots are unreachable from /.
+        - name: Create the sandbox directories for the layout under test
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ tier2b_mount }}"
+            - "{{ tier2b_top_mount_point }}"
+          changed_when: false
+
+        - name: Create the BTRFS backing image for the layout under test
+          ansible.builtin.command:
+            cmd: "truncate --size 256M {{ tier2b_image }}"
+          changed_when: false
+
+        - name: Format the backing image as BTRFS
+          ansible.builtin.command:
+            cmd: "mkfs.btrfs --quiet --force {{ tier2b_image }}"
+          changed_when: false
+
+        - name: Mount the layout under test with its default subvolume  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            cmd: "mount --types btrfs --options loop {{ tier2b_image }} {{ tier2b_mount }}"
+          changed_when: false
+
+        - name: Find the loop device backing the layout under test
+          ansible.builtin.command:
+            cmd: "findmnt --noheadings --output SOURCE --target {{ tier2b_mount }}"
+          register: tier2b_loop
+          changed_when: false
+
+        - name: Create the Timeshift snapshot layout inside the top-level
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - "{{ tier2b_snapshots }}"
+            - "{{ tier2b_snapshot_dir }}"
+          changed_when: false
+
+        - name: Create the @ and @home subvolumes of the snapshot
+          ansible.builtin.command:
+            cmd: "btrfs subvolume create {{ tier2b_snapshot_dir }}/{{ item }}"
+          loop:
+            - "@"
+            - "@home"
+          changed_when: false
+
+        - name: Mark both snapshot subvolumes read-only
+          ansible.builtin.command:
+            cmd: "btrfs property set -t subvol {{ tier2b_snapshot_dir }}/{{ item }} ro true"
+          loop:
+            - "@"
+            - "@home"
+          changed_when: false
+
+        - name: Write the snapshot metadata
+          ansible.builtin.copy:
+            content: |
+              {
+                "created": "1612325106",
+                "sys-uuid": "11111111-2222-3333-4444-555555555555",
+                "sys-distro": "Arch rolling",
+                "app-version": "26.09.0",
+                "tags": "weekly",
+                "live": "false",
+                "type": "btrfs",
+                "subvolumes": {"@": [], "@home": []}
+              }
+            dest: "{{ tier2b_snapshot_dir }}/info.json"
+            mode: "0644"
+          changed_when: false
+
+        - name: Create the @root subvolume standing in for subvol=/
+          ansible.builtin.command:
+            cmd: "btrfs subvolume create {{ tier2b_mount }}/@root"
+          changed_when: false
+
+        - name: Make @root the default subvolume of the filesystem
+          ansible.builtin.command:
+            cmd: "btrfs subvolume set-default {{ tier2b_mount }}/@root"
+          changed_when: false
+
+        - name: Release the layout under test before the new default takes effect
+          ansible.builtin.command:
+            cmd: "umount {{ tier2b_mount }}"
+          changed_when: false
+
+        - name: Remount so the new default subvolume takes effect  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            cmd: "mount --types btrfs --options loop {{ tier2b_image }} {{ tier2b_mount }}"
+          changed_when: false
+
+        - name: Inspect the filesystem root exposed by the layout under test
+          ansible.builtin.command:
+            cmd: "findmnt --raw --noheadings --output FSROOT --mountpoint {{ tier2b_mount }}"
+          register: tier2b_fsroot
+          changed_when: false
+
+        - name: Verify the layout under test hides the top-level
+          ansible.builtin.assert:
+            that:
+              - tier2b_fsroot.rc == 0
+              - tier2b_fsroot.stdout | trim | length > 0
+              - tier2b_fsroot.stdout | trim != '/'
+            fail_msg: >-
+              {{ tier2b_mount }} must expose a subvolume other than the
+              top-level (got fsroot '{{ tier2b_fsroot.stdout | trim }}'), like a
+              real `subvol=/@` host. Otherwise the auto-mount path is not
+              exercised.
+            success_msg: "No fsroot \"/\" mount: the auto-mount fallback is required"
+
+        - name: Run the snapshot role with auto-detection enabled
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            timeshift_device: "{{ tier2b_loop.stdout | trim }}"
+            snapshot_top_mount_point: "{{ tier2b_top_mount_point }}"
+
+        - name: Assert the top-level was mounted and the snapshot resolved
+          ansible.builtin.assert:
+            that:
+              - snapshot_top_mount == tier2b_top_mount_point
+              - snapshot_top_mount_temporary | bool
+              # The layout was built through {{ tier2b_mount }} and is reached
+              # through the temporary mount instead, so the paths differ while
+              # the subvolume they expose is the same one.
+              - snapshot_root_dir == tier2b_top_mount_point + '/timeshift-btrfs/snapshots'
+              - resolved_snapshot == tier2b_snapshot_name
+              - snapshot_root == tier2b_top_mount_point
+                + '/timeshift-btrfs/snapshots/' + tier2b_snapshot_name + '/@'
+              - snapshot_home == tier2b_top_mount_point
+                + '/timeshift-btrfs/snapshots/' + tier2b_snapshot_name + '/@home'
+            fail_msg: >-
+              Auto-detection did not resolve the snapshot under the unmounted
+              top-level: top={{ snapshot_top_mount }} root={{ snapshot_root_dir }}
+            success_msg: >-
+              Resolved {{ resolved_snapshot }} through the temporary
+              read-only top-level mount at {{ snapshot_top_mount }}
+
+        - name: Inspect the temporary top-level mount options
+          ansible.builtin.command:
+            cmd: "findmnt --raw --noheadings --output FSROOT,OPTIONS --mountpoint {{ tier2b_top_mount_point }}"
+          register: tier2b_top_mount
+          changed_when: false
+
+        - name: Assert the temporary top-level mount is the top-level, read-only
+          ansible.builtin.assert:
+            that:
+              - tier2b_top_mount.rc == 0
+              - tier2b_top_mount.stdout | trim | split(' ') | first == '/'
+              - "'ro' in (tier2b_top_mount.stdout | trim | split(' ') | last | split(','))"
+            fail_msg: "Unexpected ephemeral mount: {{ tier2b_top_mount.stdout }}"
+            success_msg: "Ephemeral mount is the top-level, read-only"
+
+        - name: Release the temporary top-level mount
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/unmount_btrfs_top.yml
+          vars:
+            snapshot_top_mount_point: "{{ tier2b_top_mount_point }}"
+
+        - name: Assert the temporary top-level mount is gone
+          ansible.builtin.command:
+            cmd: "findmnt --noheadings --mountpoint {{ tier2b_top_mount_point }}"
+          register: tier2b_top_teardown
+          changed_when: false
+          failed_when: false
+
+        - name: Assert nothing was left behind
+          ansible.builtin.assert:
+            that:
+              - tier2b_top_teardown.rc != 0
+            fail_msg: "The ephemeral top-level mount was not released"
+            success_msg: "Ephemeral top-level mount released and mount point removed"
+
+        - name: Release the layout under test before the next block
+          ansible.builtin.shell: |
+            set -uo pipefail
+            while findmnt --mountpoint {{ tier2b_mount }} >/dev/null 2>&1; do
+              umount -R {{ tier2b_mount }} 2>/dev/null || umount -lR {{ tier2b_mount }} 2>/dev/null || break
+            done
+          args:
+            executable: /bin/bash
+          changed_when: false
+          failed_when: false
+
+      always:
+        - name: Restore the snapshot facts resolved by the first block
+          ansible.builtin.set_fact:
+            resolved_snapshot: "{{ tier2_saved_snapshot_facts.resolved_snapshot }}"
+            snapshot_root_dir: "{{ tier2_saved_snapshot_facts.snapshot_root_dir }}"
+            snapshot_dir: "{{ tier2_saved_snapshot_facts.snapshot_dir }}"
+            snapshot_root: "{{ tier2_saved_snapshot_facts.snapshot_root }}"
+            snapshot_home: "{{ tier2_saved_snapshot_facts.snapshot_home }}"
+
+    - name: Exercise a failing preflight and assert the mount is released
+      when: tier2_uid.stdout | trim == '0'
+      tags:
+        - molecule-idempotence-notest
+      block:
+        # playbooks/preflight.yml owns the temporary top-level mount and releases
+        # it in an `always`, so a guard that aborts the play must not leave the
+        # host holding a read-only top-level mount of its own snapshots. This
+        # block replays the real playbook as a child process, because `always`
+        # is a play-level guarantee that cannot be reached with include_tasks.
+        - name: Create the sandbox directory for the child play
+          ansible.builtin.file:
+            path: "{{ tier2_sandbox }}"
+            state: directory
+            mode: "0755"
+          changed_when: false
+
+        - name: Mount the layout under test again
+          ansible.builtin.command:  # noqa command-instead-of-module
+            cmd: "mount --types btrfs --options loop {{ tier2b_image }} {{ tier2b_mount }}"
+          changed_when: false
+
+        - name: Find the loop device backing the layout under test
+          ansible.builtin.command:
+            cmd: "findmnt --noheadings --output SOURCE --target {{ tier2b_mount }}"
+          register: tier2c_loop
+          changed_when: false
+
+        - name: Collect the preflight variables to replay in the child play
+          ansible.builtin.set_fact:
+            tier2c_preflight_vars:
+              vm_name: "{{ vm_name }}"
+              vm_images_dir: "{{ vm_images_dir }}"
+              vm_disk: "{{ vm_disk }}"
+              vm_disk_size: "{{ vm_disk_size }}"
+              work_dir: "{{ work_dir }}"
+              # Forwarded verbatim: this list is the one already validated on
+              # this host, so the child play cannot abort on the command guard
+              # instead of on the missing snapshot this test is about.
+              snapshot_required_commands: "{{ snapshot_required_commands }}"
+              confirm_restore: true
+              # A snapshot that does not exist: the role has to mount the
+              # top-level before it can look the snapshot up, so the guard fires
+              # with the mount already in place.
+              snapshot: "2099-01-01_00-00-00"
+              timeshift_device: "{{ tier2c_loop.stdout | trim }}"
+              snapshot_top_mount_point: "{{ tier2b_top_mount_point }}"
+
+        - name: Write the extra vars of the child play
+          ansible.builtin.copy:
+            content: "{{ tier2c_preflight_vars | to_nice_json }}\n"
+            dest: "{{ tier2_sandbox }}/preflight-failure-vars.json"
+            mode: "0600"
+          changed_when: false
+
+        - name: Run the preflight playbook against a snapshot that does not exist
+          ansible.builtin.command:
+            argv:
+              # -m, not the console script: the interpreter is the one this play
+              # already runs under, so the child play sees the same collections
+              # and the same ansible.cfg.
+              - "{{ ansible_playbook_python }}"
+              - -m
+              - ansible.cli.playbook
+              - "{{ project_dir }}/playbooks/preflight.yml"
+              - --connection
+              - local
+              - --extra-vars
+              - "@{{ tier2_sandbox }}/preflight-failure-vars.json"
+            # The project directory holds the ansible.cfg that pins
+            # collections_path; without it the child play resolves collections
+            # from ~/.ansible and the roles can miss modules.
+            chdir: "{{ project_dir }}"
+          register: tier2c_preflight
+          changed_when: false
+          failed_when: false
+
+        # The child writes its play report to stdout, but a failure raised by a
+        # module in a nested include lands on stderr depending on the callback,
+        # so both streams are kept: a silent rc=2 is the hardest failure to read.
+        - name: Keep both output streams of the child play for diagnosis
+          ansible.builtin.copy:
+            content: |
+              === rc={{ tier2c_preflight.rc }} ===
+              === stdout ===
+              {{ tier2c_preflight.stdout }}
+              === stderr ===
+              {{ tier2c_preflight.stderr }}
+            dest: "{{ tier2_sandbox }}/preflight-failure.log"
+            mode: "0600"
+          changed_when: false
+
+        - name: Collect the output of the child play
+          ansible.builtin.set_fact:
+            tier2c_preflight_output: >-
+              {{ (tier2c_preflight.stdout | default(''))
+                 ~ (tier2c_preflight.stderr | default('')) }}
+
+        - name: Assert the preflight aborted on the missing snapshot
+          ansible.builtin.assert:
+            that:
+              - tier2c_preflight.rc != 0
+              - "'was not found under' in tier2c_preflight_output"
+            fail_msg: >-
+              The preflight did not abort on the missing snapshot (rc={{ tier2c_preflight.rc }}).
+              Full child output is in {{ tier2_sandbox }}/preflight-failure.log.
+              Last output: {{ tier2c_preflight_output_lines | default([]) | join(' ') }}
+            success_msg: "Preflight aborted on the missing snapshot, as designed"
+
+        - name: Inspect the temporary top-level mount left by the failed preflight
+          ansible.builtin.command:
+            cmd: "findmnt --noheadings --mountpoint {{ tier2b_top_mount_point }}"
+          register: tier2c_leftover
+          changed_when: false
+          failed_when: false
+
+        - name: Inspect the mount point left by the failed preflight
+          ansible.builtin.stat:
+            path: "{{ tier2b_top_mount_point }}"
+          register: tier2c_mount_point
+
+        - name: Assert the failed preflight left no mount behind
+          ansible.builtin.assert:
+            that:
+              - tier2c_leftover.rc != 0
+              - not tier2c_mount_point.stat.exists
+            fail_msg: >-
+              The failed preflight left the ephemeral top-level mount in place:
+              {{ tier2c_leftover.stdout | default('') }}
+            success_msg: >-
+              Failed preflight released its ephemeral top-level mount and removed
+              the mount point
+
+      always:
+        - name: Release the layout under test before the next block
+          ansible.builtin.shell: |
+            set -uo pipefail
+            while findmnt --mountpoint {{ tier2b_mount }} >/dev/null 2>&1; do
+              umount -R {{ tier2b_mount }} 2>/dev/null || umount -lR {{ tier2b_mount }} 2>/dev/null || break
+            done
+          args:
+            executable: /bin/bash
+          changed_when: false
+          failed_when: false
+
+    # The fixture marks @ and @home read-only by hand, which is not what
+    # Timeshift does: it creates read-write snapshots, and `btrfs send` refuses
+    # those. This block replays that exact state and requires the opt-in
+    # protection to flip the flag on both subvolumes, with nothing left mounted.
+    - name: Protect a read-write Timeshift snapshot for btrfs send
+      when: tier2_uid.stdout | trim == '0'
+      tags:
+        - molecule-idempotence-notest
+      block:
+        - name: Mount the layout under test at the top-level
+          # Explicit subvolid=5: the fixture made @root the filesystem default,
+          # so a plain mount would expose @root and hide the timeshift-btrfs tree
+          # that lives in the top-level next to it, exactly like subvol=/@ does.
+          ansible.builtin.command:  # noqa command-instead-of-module
+            cmd: "mount --types btrfs --options subvolid=5,loop {{ tier2b_image }} {{ tier2b_mount }}"
+          changed_when: false
+
+        - name: Make the snapshot look like a real Timeshift snapshot
+          ansible.builtin.command:
+            cmd: "btrfs property set -t subvol {{ tier2b_snapshot_dir }}/{{ item }} ro false"
+          loop:
+            - "@"
+            - "@home"
+          changed_when: false
+
+        - name: Run the snapshot role with the read-only protection enabled
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            snapshot: "{{ tier2b_snapshot_name }}"
+            snapshot_protect_source_read_only: true
+
+        - name: Read the read-only property of the protected subvolumes
+          ansible.builtin.command:
+            cmd: "btrfs property get -t subvol {{ tier2b_snapshot_dir }}/{{ item }} ro"
+          loop:
+            - "@"
+            - "@home"
+          register: tier2d_ro
+          changed_when: false
+
+        - name: Inspect the scratch mount point left by the protection
+          ansible.builtin.command:
+            cmd: "findmnt --noheadings --mountpoint {{ snapshot_protect_scratch }}"
+          register: tier2d_scratch
+          changed_when: false
+          failed_when: false
+
+        - name: Inspect the protect directory left by the protection
+          ansible.builtin.stat:
+            path: "{{ snapshot_protect_mount_point }}"
+          register: tier2d_protect_dir
+
+        - name: Assert the snapshot became sendable and left no mount behind
+          ansible.builtin.assert:
+            that:
+              - item.1.stdout | trim == 'ro=true'
+            fail_msg: >-
+              The protection left {{ item.0 }} with
+              '{{ item.1.stdout | trim }}' instead of ro=true.
+            success_msg: "{{ item.0 }} is now sendable"
+          loop: "{{ tier2d_ro.results }}"
+          loop_control:
+            label: "{{ item.0 }}"
+
+        - name: Assert the protection released its read-write mount
+          ansible.builtin.assert:
+            that:
+              - tier2d_scratch.rc != 0
+              - not tier2d_protect_dir.stat.exists
+            fail_msg: >-
+              The protection left its scratch mount in place:
+              {{ tier2d_scratch.stdout | default('') }}. A read-write mount of a
+              snapshot must never outlive the run.
+            success_msg: >-
+              Both subvolumes are sendable and the read-write mount is gone
+
+      always:
+        - name: Release the layout under test before the next block
+          ansible.builtin.shell: |
+            set -uo pipefail
+            for mount_point in {{ snapshot_protect_scratch }} {{ tier2b_mount }}; do
+              while findmnt --mountpoint "$mount_point" >/dev/null 2>&1; do
+                umount -R "$mount_point" 2>/dev/null || umount -lR "$mount_point" 2>/dev/null || break
+              done
+            done
+          args:
+            executable: /bin/bash
+          changed_when: false
+          failed_when: false
 
     - name: Exercise the disk role with atomic swap and ephemeral mounts
       when: tier2_uid.stdout | trim == '0'
@@ -477,7 +946,8 @@
           ansible.builtin.shell: |
             set -uo pipefail
             # Unmount all tier2 mounts recursively (nested -> outer)
-            for mp in {{ work_dir }}/mnt-root {{ work_dir }}/mnt {{ tier2_mount }}; do
+            for mp in {{ work_dir }}/mnt-root {{ work_dir }}/mnt {{ tier2_mount }} \
+                      {{ tier2b_mount }} {{ tier2b_top_mount_point }}; do
               while findmnt --mountpoint "$mp" >/dev/null 2>&1; do
                 umount -R "$mp" 2>/dev/null || umount -lR "$mp" 2>/dev/null || break
               done

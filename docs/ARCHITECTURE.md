@@ -91,11 +91,24 @@ permanece inalterado.
   (`snapshot_stage`), `e2e_host_capabilities` (`e2e_preflight`).
   `boot_guest_agent_available` (role `boot`) informa se o clone oferece o QEMU
   guest agent e é registrado em `e2e-vars.yml` para o `verify`.
+- `snapshot_top_mount` (topo BTRFS em uso) e `snapshot_top_mount_temporary`
+  (montado pelo role e liberado pelo play, num bloco `always`).
+- Fatos da auditoria de boot state: `snapshot_audit_root_is_live`,
+  `snapshot_audit_home_is_live`, `snapshot_audit_root_is_default`,
+  `snapshot_audit_home_is_default`, `snapshot_audit_kernel_boots_snapshot`,
+  `snapshot_audit_root_path_is_snapshot`, `snapshot_audit_same_filesystem` e a
+  lista `snapshot_audit_findings` (sempre definida: vazia quando a auditoria não
+  rodou, com `snapshot_audit_skipped_reason` explicando o porquê).
+- Fatos do relatório de tamanho: `snapshot_size_report` (lista de
+  `subvolume`/`total`/`exclusive`/`shared`) e `snapshot_size_unavailable`.
 
 ## Fatos do host de referência (detectados)
 
-- Arch Linux, BTRFS com `@` (raiz) e `@home`, topo montado em `/mnt/btrfs-top`.
-- Snapshots em `/mnt/btrfs-top/timeshift-btrfs/snapshots` (Timeshift 25.12).
+- Arch Linux, BTRFS com `@` (raiz) e `@home`; o topo (subvolid=5) **não** é
+  montado pelo layout `subvol=/@`, então o `snapshot` o monta read-only em
+  `/run/arch-timeshift-vm/btrfs-top` (ou usa um topo já montado, como
+  `/mnt/btrfs-top`).
+- Snapshots em `<topo>/timeshift-btrfs/snapshots` (Timeshift 25.12).
 - `/boot` é um ESP vfat **separado**, fora do snapshot BTRFS.
 - Kernel em `/usr/lib/modules/<ver>/vmlinuz` (esse sim dentro do snapshot).
 - QEMU 11.1, libvirt 12.7, rede `default` ativa, KVM aninhado habilitado.

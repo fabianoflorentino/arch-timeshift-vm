@@ -1,0 +1,57 @@
+---
+# How much disk space the snapshot being restored actually occupies, ported from
+# the reporting half of /data/scripts/timeshift-check-system-usage.sh. That
+# script hardcoded /dev/nvme1n1p2, mounted the top-level read-write and shelled
+# out to sudo; here the path comes from the snapshot already resolved, the
+# filesystem is mounted read-only by the caller, and every size comes back
+# parsed instead of pre-formatted.
+#
+# Timeshift snapshots share every extent with their parent, so "total" is the
+# logical size of the tree and tells nothing about what the snapshot costs.
+# "exclusive" is the data unique to this snapshot: the number worth looking at
+# before deciding to keep it.
+#
+# Purely informational - a btrfs too old for the shared-extent FIEMAP flag, or a
+# filesystem that refuses the walk, reports n/a instead of failing the preflight.
+
+- name: Measure the disk space held by each snapshot subvolume
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - filesystem
+      - du
+      - --summarize
+      - --raw
+      - "{{ item }}"
+  loop:
+    - "{{ snapshot_root }}"
+    - "{{ snapshot_home }}"
+  register: snapshot_du
+  changed_when: false
+  failed_when: false
+
+# One row per measurable subvolume: [total, exclusive, shared, path].
+- name: Publish the measured size of each snapshot subvolume
+  ansible.builtin.set_fact:
+    snapshot_size_report: >-
+      {{ (snapshot_size_report | default([])) + [{
+           'subvolume': item.item | basename,
+           'total': (size_row | first | default('0', true)) | int,
+           'exclusive': (size_row[1:2] | first | default('0', true)) | int,
+           'shared': (size_row[2:3] | first | default('0', true)) | int,
+         }] }}
+  vars:
+    size_row: "{{ item.stdout | default('') | trim | split() }}"
+  loop: "{{ snapshot_du.results | default([]) }}"
+  when:
+    - item.rc | int == 0
+    - size_row | length >= 4
+
+- name: Publish the subvolumes whose size could not be measured
+  ansible.builtin.set_fact:
+    snapshot_size_unavailable: >-
+      {{ (snapshot_size_unavailable | default([])) + [item.item | basename] }}
+  loop: "{{ snapshot_du.results | default([]) }}"
+  when: (item.rc | int != 0) or (size_row | length < 4)
+  vars:
+    size_row: "{{ item.stdout | default('') | trim | split() }}"

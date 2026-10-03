@@ -10,6 +10,10 @@
     fixture_images: "{{ fixture_root }}/images"
     fixture_snapshot: "2020-01-02_03-04-05"
     fixture_snapshot_dir: "{{ fixture_snapshots }}/{{ fixture_snapshot }}"
+    # Sorts before fixture_snapshot, so `snapshot=latest` keeps resolving to the
+    # healthy fixture and only an explicit request reaches this one.
+    fixture_bad_snapshot: "2019-12-25_00-00-00"
+    fixture_bad_snapshot_dir: "{{ fixture_snapshots }}/{{ fixture_bad_snapshot }}"
 
     # Base variables for the role under test. Individual negative cases below
     # override a single value to prove a guard fires.
@@ -59,16 +63,36 @@
         - "{{ fixture_snapshot_dir }}/@/usr/bin"
         - "{{ fixture_snapshot_dir }}/@/usr/lib/modules/fixture"
 
+    # Mirrors what Timeshift 26.09.0 actually writes: `created` is an epoch
+    # string and origin is `sys-uuid`/`sys-distro`. There is no `hostname` key.
     - name: Write the fixture snapshot metadata
       ansible.builtin.copy:
         content: |
           {
+            "created": "1577934245",
+            "sys-uuid": "11111111-2222-3333-4444-555555555555",
+            "sys-distro": "Arch rolling",
+            "app-version": "26.09.0",
+            "file_count": "0",
+            "tags": "daily",
+            "comments": "",
+            "live": "false",
             "type": "btrfs",
-            "subvolumes": {"@": [], "@home": []},
-            "created": "2020-01-02 03:04:05",
-            "hostname": "tier1-host"
+            "subvolumes": {"@": [], "@home": []}
           }
         dest: "{{ fixture_snapshot_dir }}/info.json"
+        mode: "0644"
+
+    - name: Write the fixture hostname of the recorded origin
+      ansible.builtin.copy:
+        content: "tier1-host\n"
+        dest: "{{ fixture_snapshot_dir }}/@/etc/hostname"
+        mode: "0644"
+
+    - name: Write the fixture hostname inside the snapshot tree
+      ansible.builtin.copy:
+        content: "tier1-host\n"
+        dest: "{{ fixture_snapshot_dir }}/@/etc/hostname"
         mode: "0644"
 
     - name: Write the fixture boot markers
@@ -81,6 +105,30 @@
         - "{{ fixture_snapshot_dir }}/@/usr/bin/grub-install"
         - "{{ fixture_snapshot_dir }}/@/usr/bin/mkinitcpio"
         - "{{ fixture_snapshot_dir }}/@/usr/lib/modules/fixture/vmlinuz"
+
+    # A structurally valid BTRFS snapshot that never declares which machine it
+    # came from: Timeshift's sys-uuid is absent, so the origin is unknown.
+    - name: Create the fixture tree of an origin-less snapshot
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ fixture_bad_snapshot_dir }}"
+        - "{{ fixture_bad_snapshot_dir }}/@/"
+        - "{{ fixture_bad_snapshot_dir }}/@home"
+
+    - name: Write the metadata of the origin-less snapshot
+      ansible.builtin.copy:
+        content: |
+          {
+            "created": "1577232000",
+            "sys-distro": "Arch rolling",
+            "type": "btrfs",
+            "subvolumes": {"@": [], "@home": []}
+          }
+        dest: "{{ fixture_bad_snapshot_dir }}/info.json"
+        mode: "0644"
 
     - name: Positive - snapshot_source resolves and validates a bootable fixture
       block:
@@ -185,9 +233,30 @@
           ansible.builtin.assert:
             that:
               - snapshot_top_mount == '/mnt/btrfs-top'
+              - not (snapshot_top_mount_temporary | bool)
             fail_msg: "Mount selector returned '{{ snapshot_top_mount }}'"
 
-    - name: Unit - the selector returns empty when no matching top-level is mounted
+    - name: Unit - the device is derived without the findmnt subvolume suffix
+      block:
+        # Regression: '\[.*\]$' inside single-quoted YAML is a literal
+        # backslash in the regex, so the [/@] suffix survived and mount(8) was
+        # handed a device that does not exist. findmnt appends the suffix on
+        # every real host with subvol=@.
+        - name: Derive the device from a realistic findmnt source
+          ansible.builtin.set_fact:
+            tier1_derived_device: >-
+              {{ '/dev/nvme0n1p2[/@]' | trim | regex_replace('\[[^]]*\]$', '') }}
+
+        - name: Assert the subvolume suffix was stripped
+          ansible.builtin.assert:
+            that:
+              - tier1_derived_device == '/dev/nvme0n1p2'
+            fail_msg: >-
+              Derived device is '{{ tier1_derived_device }}'; mount(8) would
+              reject it. The [/@] suffix must be stripped.
+
+    - name: Negative - the selector aborts when auto-mount is disabled and no
+        top-level mount exists
       block:
         - name: Seed findmnt output without a top-level mount for the device
           ansible.builtin.set_fact:
@@ -196,15 +265,259 @@
               stdout_lines:
                 - "/dev/nvme1n1p2 / /@"
 
-        - name: Run the top-level mount selector
+        - name: Run the top-level mount selector without the auto-mount fallback
           ansible.builtin.include_tasks: >-
             {{ playbook_dir }}/../../roles/snapshot/tasks/select_btrfs_top_mount.yml
+          vars:
+            timeshift_autodetect_mount_top: false
 
         - name: Assert the selector reports no matching top-level
           ansible.builtin.assert:
             that:
               - snapshot_top_mount | length == 0
             fail_msg: "Mount selector should return empty when no top-level is mounted"
+
+    - name: Negative - the auto-mount fallback fails loudly on an unmountable device
+      block:
+        - name: Seed findmnt output without a top-level mount for the device
+          ansible.builtin.set_fact:
+            snapshot_device: /dev/loop9
+            snapshot_btrfs_mounts:
+              stdout_lines:
+                - "/dev/nvme1n1p2 / /@"
+
+        - name: Run the top-level mount selector with the auto-mount fallback
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/select_btrfs_top_mount.yml
+          vars:
+            snapshot_top_mount_point: "{{ fixture_root }}/auto-top"
+            snapshot_required_commands:
+              - blkid
+              - mount
+              - umount
+
+        - name: Record a failed auto-mount guard
+          ansible.builtin.set_fact:
+            tier1_automount_guard: false
+      rescue:
+        - name: Record a successful auto-mount guard
+          ansible.builtin.set_fact:
+            tier1_automount_guard: true
+
+    - name: Unit - the top-level teardown is a no-op when nothing is mounted
+      block:
+        - name: Run the top-level teardown on an unused mount point
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/unmount_btrfs_top.yml
+          vars:
+            snapshot_top_mount_point: "{{ fixture_root }}/never-mounted"
+
+        - name: Stat the snapshot fixtures after the teardown
+          ansible.builtin.stat:
+            path: "{{ fixture_snapshots }}"
+          register: tier1_fixtures_after_teardown
+
+        - name: Assert the teardown removed nothing else
+          ansible.builtin.assert:
+            that:
+              - tier1_fixtures_after_teardown.stat.exists
+              - tier1_fixtures_after_teardown.stat.isdir
+            fail_msg: "Top-level teardown disturbed the snapshot fixtures"
+
+    # Ports the checks 3/4/5/7 of /data/scripts/timeshift-check-snapshot.sh.
+    # Tier 1 has no BTRFS filesystem, so the host boot state is seeded and the
+    # audit is told not to probe it; the decision logic is what is under test.
+    - name: Unit - the boot state audit stays silent on an independent snapshot
+      block:
+        - name: Run the boot state audit against the seeded host
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/audit_boot_state.yml
+          vars:
+            snapshot_root: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@
+            snapshot_home: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@home
+            snapshot_top_mount: "{{ fixture_root }}/top"
+            snapshot_root_dir: "{{ fixture_root }}/top/timeshift-btrfs/snapshots"
+            snapshot_audit_collect_host_state: false
+            snapshot_audit_same_filesystem: true
+            snapshot_audit_host_rootid:
+              stdout: "256"
+            snapshot_audit_host_fsroot:
+              stdout: "/@"
+            snapshot_audit_default:
+              stdout: "ID 256 gen 42 top level 5 path @"
+            snapshot_audit_cmdline_raw:
+              content: "{{ 'root=UUID=booting rw subvol=/@ quiet' | b64encode }}"
+            snapshot_root_check:
+              stdout: |
+                Name:              @
+                Subvolume ID:      257
+                Flags:             readonly
+            snapshot_home_check:
+              stdout: |
+                Name:              @home
+                Subvolume ID:      258
+                Flags:             readonly
+
+        - name: Assert the audit found no overlap
+          ansible.builtin.assert:
+            that:
+              - snapshot_audit_findings | length == 0
+            fail_msg: >-
+              A snapshot with its own subvolume IDs and an unrelated boot
+              produced findings: {{ snapshot_audit_findings | join('; ') }}
+
+    - name: Unit - the boot state audit flags a snapshot the host booted from
+      block:
+        - name: Run the audit against a host running from the snapshot
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/audit_boot_state.yml
+          vars:
+            snapshot_root: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@
+            snapshot_home: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@home
+            snapshot_top_mount: "{{ fixture_root }}/top"
+            snapshot_root_dir: "{{ fixture_root }}/top/timeshift-btrfs/snapshots"
+            snapshot_audit_collect_host_state: false
+            snapshot_audit_same_filesystem: true
+            # Same ID as the host root, same default subvolume, and the kernel
+            # command line boots straight into it: checks 3, 4, 5 and 7 at once.
+            snapshot_root_check:
+              stdout: |
+                Name:              @
+                Subvolume ID:      256
+                Flags:             readonly
+            snapshot_home_check:
+              stdout: |
+                Name:              @home
+                Subvolume ID:      259
+                Flags:             readonly
+            snapshot_audit_host_rootid:
+              stdout: "256"
+            snapshot_audit_host_fsroot:
+              stdout: "/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@"
+            snapshot_audit_default:
+              stdout: "ID 256 gen 42 top level 5 path timeshift-btrfs/snapshots/x/@"
+            snapshot_audit_cmdline: >-
+              root=UUID=booting rw subvol=/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@ quiet
+            snapshot_audit_cmdline_raw:
+              content: "{{ snapshot_audit_cmdline | trim | b64encode }}"
+
+        - name: Assert every boot state overlap was detected
+          ansible.builtin.assert:
+            that:
+              - snapshot_audit_root_is_live | bool
+              - snapshot_audit_root_is_default | bool
+              - snapshot_audit_kernel_boots_snapshot | bool
+              - snapshot_audit_root_path_is_snapshot | bool
+              - not (snapshot_audit_home_is_live | bool)
+              - snapshot_audit_findings | length == 4
+            fail_msg: >-
+              Expected four findings (live root, default subvolume, kernel
+              subvol=, root path), got: {{ snapshot_audit_findings | join('; ') }}
+
+    - name: Negative - a snapshot the host booted from must abort in strict mode
+      block:
+        - name: Run the audit with snapshot_refuse_live_boot_state enabled
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/audit_boot_state.yml
+          vars:
+            snapshot_root: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@
+            snapshot_home: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@home
+            snapshot_top_mount: "{{ fixture_root }}/top"
+            snapshot_root_dir: "{{ fixture_root }}/top/timeshift-btrfs/snapshots"
+            snapshot_audit_collect_host_state: false
+            snapshot_audit_same_filesystem: true
+            # The snapshot's @ is the subvolume the host booted from.
+            snapshot_root_check:
+              stdout: |
+                Name:              @
+                Subvolume ID:      256
+                Flags:             readonly
+            snapshot_home_check:
+              stdout: |
+                Name:              @home
+                Subvolume ID:      259
+                Flags:             readonly
+            snapshot_audit_host_rootid:
+              stdout: "256"
+            snapshot_audit_host_fsroot:
+              stdout: "/@"
+            snapshot_audit_default:
+              stdout: "ID 259 gen 42 top level 5 path @home"
+            snapshot_audit_cmdline_raw:
+              content: "{{ 'root=UUID=booting rw subvol=/@ quiet' | b64encode }}"
+            snapshot_refuse_live_boot_state: true
+
+        - name: Record a failed boot state guard
+          ansible.builtin.set_fact:
+            tier1_boot_state_guard: false
+      rescue:
+        - name: Record a successful boot state guard
+          ansible.builtin.set_fact:
+            tier1_boot_state_guard: true
+
+    - name: Negative - the boot state guard is off by default
+      block:
+        - name: Run the audit with the same overlap but strict mode disabled
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/audit_boot_state.yml
+          vars:
+            snapshot_root: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@
+            snapshot_home: >-
+              {{ fixture_root }}/top/timeshift-btrfs/snapshots/{{ fixture_snapshot }}/@home
+            snapshot_top_mount: "{{ fixture_root }}/top"
+            snapshot_root_dir: "{{ fixture_root }}/top/timeshift-btrfs/snapshots"
+            snapshot_audit_collect_host_state: false
+            snapshot_audit_same_filesystem: true
+            snapshot_root_check:
+              stdout: |
+                Subvolume ID:      256
+            snapshot_home_check:
+              stdout: |
+                Subvolume ID:      259
+            snapshot_audit_host_rootid:
+              stdout: "256"
+            snapshot_audit_host_fsroot:
+              stdout: "/@"
+            snapshot_audit_default:
+              stdout: "ID 259 gen 42 top level 5 path @home"
+            snapshot_audit_cmdline_raw:
+              content: "{{ 'root=UUID=booting rw subvol=/@ quiet' | b64encode }}"
+            snapshot_refuse_live_boot_state: false
+
+        - name: Record that the overlap was only reported
+          ansible.builtin.set_fact:
+            tier1_boot_state_warn_only: true
+      rescue:
+        - name: Record that the overlap wrongly aborted the run
+          ansible.builtin.set_fact:
+            tier1_boot_state_warn_only: false
+
+    - name: Unit - the boot state audit skips snapshots on another filesystem
+      block:
+        - name: Run the audit for a snapshot on a foreign filesystem
+          ansible.builtin.include_tasks: >-
+            {{ playbook_dir }}/../../roles/snapshot/tasks/audit_boot_state.yml
+          vars:
+            snapshot_root_dir: "{{ fixture_snapshots }}"
+            snapshot_audit_collect_host_state: false
+            snapshot_audit_same_filesystem: false
+
+        - name: Assert the audit refused to compare unrelated subvolume IDs
+          ansible.builtin.assert:
+            that:
+              - snapshot_audit_findings | default([]) | length == 0
+              # An audit that did not run has to say so instead of staying quiet.
+              - snapshot_audit_skipped_reason | default('') | length > 0
+            fail_msg: >-
+              The audit compared subvolume IDs across two filesystems, where
+              they are not comparable, and reported findings it cannot justify.
 
     - name: Negative - confirm_restore=false must abort
       block:
@@ -270,6 +583,22 @@
           ansible.builtin.set_fact:
             tier1_space_guard: true
 
+    - name: Negative - a snapshot that does not declare sys-uuid must abort
+      block:
+        - name: Run the snapshot role against the origin-less fixture
+          ansible.builtin.include_role:
+            name: snapshot
+          vars:
+            snapshot: "{{ fixture_bad_snapshot }}"
+
+        - name: Record a failed provenance guard
+          ansible.builtin.set_fact:
+            tier1_provenance_guard: false
+      rescue:
+        - name: Record a successful provenance guard
+          ansible.builtin.set_fact:
+            tier1_provenance_guard: true
+
     - name: Assert every negative guard fired
       ansible.builtin.assert:
         that:
@@ -278,6 +607,9 @@
           - tier1_snapshot_guard | default(false)
           - tier1_space_guard | default(false)
           - tier1_selector_guard | default(false)
+          - tier1_provenance_guard | default(false)
+          - tier1_boot_state_guard | default(false)
+          - tier1_boot_state_warn_only | default(false)
         fail_msg: "One or more preflight guards did not fire as expected"
         success_msg: "All snapshot preflight guards fired correctly"
 

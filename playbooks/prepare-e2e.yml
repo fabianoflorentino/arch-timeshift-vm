@@ -4,6 +4,13 @@
   become: true
   gather_facts: false
 
+  # Ansible auto-loads group_vars only next to the inventory or next to the
+  # playbook. This configuration lives at the repository root, so a playbook
+  # under playbooks/ would run unconfigured: every vm_*/work_dir/timeshift_root
+  # value would be undefined. Load it explicitly instead.
+  vars_files:
+    - ../group_vars/all.yml
+
   roles:
     - snapshot_source
     - e2e_preflight

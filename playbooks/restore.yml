@@ -1,46 +1,59 @@
 ---
+# Restore an Arch Timeshift snapshot into a disposable libvirt VM
 - name: Restore an Arch Timeshift snapshot into a disposable libvirt VM
   hosts: localhost
   become: true
   gather_facts: true
 
+  # Ansible auto-loads group_vars only next to the inventory or next to the
+  # playbook. This configuration lives at the repository root, so a playbook
+  # under playbooks/ would run unconfigured: every vm_*/work_dir/timeshift_root
+  # value would be undefined. Load it explicitly instead.
+  vars_files:
+    - ../group_vars/all.yml
+
+  # The ephemeral read-only BTRFS top-level mount created by the snapshot role
+  # must stay up until `btrfs send` has read the snapshot into the VM disk, so
+  # it is owned by the play rather than by a role. `always` releases it even
+  # when a guard aborts the pipeline halfway, which is what used to leave the
+  # host holding a top-level mount.
   tasks:
     - name: Initialize restore cleanup state
       ansible.builtin.set_fact:
         restore_pipeline_error: ""
 
-    - name: Run restore pipeline and always release a temporary snapshot mount
+    - name: Run the restore pipeline and always release the temporary snapshot mount
       block:
-        - name: Run restore roles
-          block:
-            - name: Resolve and validate the snapshot
-              ansible.builtin.include_role:
-                name: snapshot
+        - name: Run the snapshot role
+          ansible.builtin.include_role:
+            name: snapshot
 
-            - name: Prepare the VM disk
-              ansible.builtin.include_role:
-                name: disk
+        - name: Run the disk role
+          ansible.builtin.include_role:
+            name: disk
 
-            - name: Restore snapshot contents
-              ansible.builtin.include_role:
-                name: restore
+        - name: Run the restore role
+          ansible.builtin.include_role:
+            name: restore
 
-            - name: Prepare the restored system to boot
-              ansible.builtin.include_role:
-                name: boot
+        - name: Run the boot role
+          ansible.builtin.include_role:
+            name: boot
 
-            - name: Define and optionally start the VM
-              ansible.builtin.include_role:
-                name: libvirt
-          rescue:
-            - name: Record the restore pipeline failure
-              ansible.builtin.set_fact:
-                restore_pipeline_error: >-
-                  {{ ansible_failed_result.msg
-                     | default(ansible_failed_result | string) }}
+        - name: Run the libvirt role
+          ansible.builtin.include_role:
+            name: libvirt
+      rescue:
+        - name: Record the restore pipeline failure
+          ansible.builtin.set_fact:
+            restore_pipeline_error: >-
+              {{ ansible_failed_result.msg
+                 | default(ansible_failed_result | string) }}
       always:
         - name: Release the ephemeral BTRFS top-level mount
-          ansible.builtin.include_tasks: ../roles/snapshot/tasks/unmount_btrfs_top.yml
+          when: snapshot_top_mount_owned | default(false) | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../roles/snapshot/tasks/unmount_btrfs_top.yml"
 
     - name: Report restore pipeline or snapshot mount cleanup failures
       ansible.builtin.assert:
@@ -58,8 +71,9 @@
       ansible.builtin.debug:
         msg:
           - "Snapshot  : {{ resolved_snapshot }}"
-          - "Provenance: created={{ snapshot_meta_created | default('n/a') }}"
-          - "              host={{ snapshot_meta_hostname | default('n/a') }}"
+          - "Provenance: created={{ snapshot_meta_created_human | default('n/a', true) }}"
+          - "              host={{ snapshot_meta_hostname | default('n/a', true) }}"
+          - "              uuid={{ snapshot_meta_sys_uuid | default('n/a', true) }}"
           - "VM        : {{ vm_name }}"
           - "Disk      : {{ vm_disk_real | default(vm_disk) }}"
           - "State     : {{ libvirt_vm_state.stdout | default('n/a') | trim }}"

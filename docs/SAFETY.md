@@ -20,12 +20,23 @@ confirmações exigidas e os limites de mutação de cada comando.
   cópias de staging read-only.
 - `cleanup`/teardown roda sempre, inclusive em falha
   (`block/rescue/always`).
+- O mount BTRFS temporário do topo é liberado num bloco `always` de
+  `preflight.yml`/`restore.yml`: um guard que aborta o play não deixa o host
+  segurando mount do próprio snapshot.
 - Rede da VM isolada por padrão: `vm_network_mode: isolated` (sem NAT, sem
   saída externa); `default` e `none` são escolhas explícitas.
 - Recusa rodar sobre estado sujo deixado por uma execução interrompida:
   mounts sob `work_dir`, NBD servindo o disco, ou `qcow2.new` órfão.
-- Proveniência do snapshot exigida (`info.json` com `created` e `hostname`) e
-  manifest sha256 dos payloads de boot semeados na ESP.
+- Proveniência do snapshot exigida: `info.json` precisa trazer `created` e
+  `sys-uuid` (o UUID do filesystem raiz que o Timeshift grava; ele não escreve
+  `hostname`). O hostname exibido na auditoria vem do `/etc/hostname` de dentro
+  do snapshot, e é informativo. Manifest sha256 dos payloads de boot semeados
+  na ESP.
+- Auditoria de boot state: o `preflight` avisa (ou aborta com
+  `snapshot_refuse_live_boot_state=true`) quando o snapshot avaliado é o
+  subvolume do qual o host está rodando — nesse caso ele não representa um boot
+  passado. A comparação por subvolume ID é feita apenas dentro do mesmo
+  filesystem.
 - Execuções concorrentes são bloqueadas por `flock` no wrapper.
 - Sudo escalonado opcional restrito ao wrapper (`sudoers/arch-timeshift-vm`):
   o playbook escalona via `/bin/sh` do Ansible, então permissões por binário

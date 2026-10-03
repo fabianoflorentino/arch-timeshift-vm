@@ -5,6 +5,85 @@ Todas as mudanças notáveis por versão.
 As versões seguem as fases de desenvolvimento do projeto (Fase 0-6) e suas
 melhorias (ex.: Fase 6.1, Fase 6.2).
 
+## Não publicado
+
+### Adicionado
+
+- Auto-mount do topo BTRFS (subvolid=5): quando o host usa `subvol=/@` e não tem
+  o topo montado — caso em que os snapshots do Timeshift, guardados como
+  irmãos de `@`/`@home`, ficam invisíveis — o role `snapshot` monta o topo
+  read-only em `/run/arch-timeshift-vm/btrfs-top`, resolve
+  `<topo>/timeshift-btrfs/snapshots` e libera o mount no fim da execução
+  (bloco `always` de `preflight.yml`/`restore.yml` e role `e2e_cleanup`). O
+  `/etc/fstab` do host continua intocado. Desligável com
+  `timeshift_autodetect_mount_top=false`; ponto e opções configuráveis via
+  `snapshot_top_mount_point`/`snapshot_top_mount_opts`.
+- `ro=true` no `@`/`@home` do snapshot deixou de ser pré-requisito manual: o
+  `btrfs send` recusa subvolume read-write e um mount read-only não basta
+  (btrfs-send(8)), enquanto o Timeshift cria snapshots read-write. Com
+  `-e snapshot_protect_source_read_only=true` a execução monta cada subvolume num
+  scratch em `/run`, aplica `ro=true` e desmonta — sem remontar o topo
+  compartilhado, que expõe o `@`/`@home` vivos do host. Continua opt-in por
+  escrever no BTRFS do usuário; sem a flag o preflight falha mostrando os
+  comandos exatos. O `restore` já devolve `ro=false` no que recebe.
+- O flag `snapshot_top_mount_temporary` passa a ser publicado antes de o mount
+  ser tentado: um mount que falha pela metade não pode escapar do `always` do
+  play e deixar o topo montado.
+- Falha de `mount` do topo temporário agora sai como `assert` com `rc` e `stderr`
+  do `mount`, em vez do erro cru do módulo.
+- Auditoria de boot state no `preflight`: compara o `@`/`@home` do snapshot com
+  o subvolume que o host bootou (`/sys/fs/btrfs/rootid`), com o subvolume default
+  do filesystem (`btrfs subvolume get-default`), com a linha de comando do kernel
+  (`/proc/cmdline`) e com o `FSROOT` do host. Um snapshot do qual o host está
+  rodando não representa um boot passado, e restaurá-lo devolveria o estado
+  atual. Achados são warning por padrão e viram gate rígido com
+  `snapshot_refuse_live_boot_state=true`; comparações por subvolume ID só são
+  feitas entre snapshots do mesmo filesystem.
+- Relatório de tamanho do snapshot no `preflight` via
+  `btrfs filesystem du --summarize --raw`: `total`, `exclusive` e `shared` por
+  subvolume — `exclusive` é o dado que define o custo no disco da VM.
+- Diagnóstico do auto-detect: mensagem de falha passa a listar os mounts
+  BTRFS observados, o estado `btrfs_mode`/`backup_device_uuid` do Timeshift e a
+linha de `fstab` pronta; novo guard recusa snapshots de dispositivo errado quando
+o `backup_device_uuid` do Timeshift não corresponde ao dispositivo derivado de
+`/`.
+- Cobertura de teste do caso real: sandbox Tier 2 com subvolid default ≠ 5
+  exercita o auto-mount e o teardown; Tier 1 cobre o fallback desligado, o
+  fallback com dispositivo não montável e o teardown no-op.
+
+### Corrigido
+
+- Os quatro playbooks em `playbooks/` rodavam sem nenhuma configuração do
+  projeto. O Ansible só carrega `group_vars/` automaticamente quando ele fica
+  ao lado do inventário ou ao lado do playbook; com `group_vars/` na raiz e os
+  playbooks em `playbooks/`, `vm_name`, `vm_images_dir`, `vm_disk`,
+  `vm_disk_size`, `work_dir` e `timeshift_root` ficavam indefinidos, e o
+  `preflight` morria em `Validate vm_name`. Cada playbook agora declara
+  `vars_files: ../group_vars/all.yml`, e `-e` continua tendo precedência.
+  Reproduzível sem privilégio: o mesmo playbook resolvia `vm_name` na raiz e
+  `UNDEFINED` dentro de `playbooks/`.
+
+- Guard de proveniência do role `snapshot` cobrava `info.json` com `hostname`,
+  chave que o Timeshift nunca escreveu: toda snapshot real era rejeitada como
+  "de origem desconhecida", inclusive no `preflight`. O Timeshift 26.09.0
+  registra `created`, `sys-uuid` e `sys-distro`, então o guard agora exige
+  `created` + `sys-uuid` e o `fail_msg` lista as chaves presentes no arquivo.
+  O hostname passou a ser lido de `<snapshot>/@/etc/hostname`, como
+  informação, e `created` é exibido formatado em vez do epoch cru. Os fixtures de teste (`molecule
+  default/integration`) foram alinhados ao schema real do Timeshift e um caso
+  negativo novo prova que uma snapshot sem `sys-uuid` continua sendo recusada.
+
+- Um guard que abortava o play deixava o host com o topo BTRFS do próprio snapshot
+  montado em `/run/arch-timeshift-vm/btrfs-top`, e a liberação só existia em
+  `post_tasks` — que o Ansible não executa quando a task falha. O
+  `preflight.yml`/`restore.yml` passaram a usar `include_role` dentro de `block`
+  com a desmontagem em `always`, de modo que snapshot inexistente, snapshot não
+  sendable ou proveniência incompleta não deixam mount para trás.
+- O guard de `@`/`@home` read-only engolia o `rc` da leitura de
+  `btrfs property get -t subvol <path> ro`: uma leitura falha era reportada como
+  "não é read-only" em vez de "não pôde ser lido", escondendo a causa. A
+  asserção agora checa o `rc` e inclui `rc`/`stdout`/`stderr` na mensagem.
+
 ## Fase 6.2 - Endurecimento de produção (2026-09-23)
 
 Endurece a ferramenta para uso standalone e produção: CLI, segurança por

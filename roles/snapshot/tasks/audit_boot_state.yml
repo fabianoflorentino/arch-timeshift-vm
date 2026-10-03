@@ -1,0 +1,267 @@
+---
+# Tell apart a Timeshift snapshot from the live system, porting the checks 3, 4,
+# 5 and 7 of /data/scripts/timeshift-check-snapshot.sh as native tasks instead
+# of a shell script:
+#
+#   3. the snapshot's @ is the subvolume the host booted from
+#   4. the snapshot's @ or @home is the filesystem default subvolume
+#   5. the kernel command line boots from inside this snapshot
+#   7. the subvolume path the host booted from is inside this snapshot
+#
+# Subvolume IDs are only unique within one filesystem, so the audit runs alone
+# when the snapshots live on the same filesystem as /: on a separate backup
+# device the two filesystems hand out the same small IDs and every snapshot
+# would look like the live root.
+#
+# Findings are informational by default. Booting from a Timeshift snapshot is a
+# legitimate way to recover, and this pipeline never deletes snapshots, so a
+# host that runs from one is reported rather than refused. Set
+# snapshot_refuse_live_boot_state=true to turn the findings into a hard gate.
+#
+# snapshot_audit_collect_host_state exists so the decision logic can be driven
+# from seeded facts in Tier 1, where there is no BTRFS filesystem to probe.
+
+- name: Locate the filesystems holding the snapshot and the host root
+  when: snapshot_audit_collect_host_state | default(true) | bool
+  block:
+    - name: Find the source device of the snapshot directory
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --output
+          - SOURCE
+          - --target
+          - "{{ snapshot_root_dir }}"
+      register: snapshot_audit_snapshot_source
+      changed_when: false
+      failed_when: false
+
+    - name: Find the source device of the host root
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --output
+          - SOURCE
+          - --target
+          - /
+      register: snapshot_audit_root_source
+      changed_when: false
+      failed_when: false
+
+    - name: Decide whether the snapshot shares the host root filesystem
+      ansible.builtin.set_fact:
+        snapshot_audit_same_filesystem: >-
+          {{ (snapshot_audit_snapshot_source.stdout | default('') | trim | length) > 0
+             and (snapshot_audit_snapshot_source.stdout | trim
+                 | regex_replace('\[[^]]*\]$', ''))
+                 == (snapshot_audit_root_source.stdout | trim
+                     | regex_replace('\[[^]]*\]$', '')) }}
+
+- name: Audit the boot state of the host against the snapshot
+  when: snapshot_audit_same_filesystem | default(false) | bool
+  block:
+    - name: Read the subvolume ID the host booted from
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - inspect-internal
+          - rootid
+          - /
+      register: snapshot_audit_host_rootid
+      changed_when: false
+      failed_when: false
+
+    - name: Read the subvolume path the host booted from
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --output
+          - FSROOT
+          - --target
+          - /
+      register: snapshot_audit_host_fsroot
+      changed_when: false
+      failed_when: false
+
+    - name: Read the default subvolume of the filesystem
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - subvolume
+          - get-default
+          - /
+      register: snapshot_audit_default
+      changed_when: false
+      failed_when: false
+
+    - name: Read the kernel command line
+      ansible.builtin.slurp:
+        src: /proc/cmdline
+      register: snapshot_audit_cmdline_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Normalize the boot state of the host
+      ansible.builtin.set_fact:
+        # Subvolume ID of the snapshot's own @ and @home, taken from the
+        # `btrfs subvolume show` output the caller already collected.
+        snapshot_audit_root_subvol_id: >-
+          {{ snapshot_root_check.stdout | default('')
+             | regex_search('Subvolume ID:\s+([0-9]+)', '\1')
+             | default([], true) | first | default('', true) }}
+        snapshot_audit_home_subvol_id: >-
+          {{ snapshot_home_check.stdout | default('')
+             | regex_search('Subvolume ID:\s+([0-9]+)', '\1')
+             | default([], true) | first | default('', true) }}
+        snapshot_audit_host_root_id: >-
+          {{ snapshot_audit_host_rootid.stdout | default('') | trim }}
+        snapshot_audit_default_subvol_id: >-
+          {{ snapshot_audit_default.stdout | default('')
+             | regex_search('ID\s+([0-9]+)', '\1')
+             | default([], true) | first | default('', true) }}
+        # findmnt reports the fsroot of / with its leading slash ("/" for the
+        # top-level, "/@" for the usual layout); drop it so both sides compare
+        # as plain subvolume paths.
+        snapshot_audit_host_root_path: >-
+          {{ snapshot_audit_host_fsroot.stdout | default('') | trim
+             | regex_replace('^/', '') }}
+        snapshot_audit_kernel_subvol: >-
+          {{ (snapshot_audit_cmdline_raw.content | default('') | b64decode)
+             | regex_search('(?:^|\s)subvol=([^\s,]+)', '\1')
+             | default([], true) | first | default('', true)
+             | regex_replace('^/', '') }}
+
+    # The path a snapshot subvolume occupies inside the BTRFS top-level, which
+    # is what the kernel command line names when the host boots from one. Left
+    # empty when the snapshots were reached without going through the top-level
+    # mount, where such a path does not exist.
+    - name: Compute the snapshot paths inside the BTRFS top-level
+      when: snapshot_top_mount | default('') | length > 0
+      block:
+        - name: Publish the snapshot subvolume paths
+          ansible.builtin.set_fact:
+            snapshot_audit_root_subvol_path: >-
+              {{ snapshot_root
+                 | regex_replace('^' ~ (snapshot_top_mount | regex_escape) ~ '/', '')
+                 if snapshot_root.startswith(snapshot_top_mount + '/') else '' }}
+            snapshot_audit_home_subvol_path: >-
+              {{ snapshot_home
+                 | regex_replace('^' ~ (snapshot_top_mount | regex_escape) ~ '/', '')
+                 if snapshot_home.startswith(snapshot_top_mount + '/') else '' }}
+
+    - name: Default the snapshot subvolume paths when the top-level is not in use
+      ansible.builtin.set_fact:
+        snapshot_audit_root_subvol_path: >-
+          {{ snapshot_audit_root_subvol_path | default('') }}
+        snapshot_audit_home_subvol_path: >-
+          {{ snapshot_audit_home_subvol_path | default('') }}
+
+    - name: Compare the boot state of the host with the snapshot
+      ansible.builtin.set_fact:
+        # Check 3: the snapshot subvolume is the one the host booted from.
+        snapshot_audit_root_is_live: >-
+          {{ snapshot_audit_host_root_id | length > 0
+             and snapshot_audit_root_subvol_id | length > 0
+             and snapshot_audit_host_root_id == snapshot_audit_root_subvol_id }}
+        snapshot_audit_home_is_live: >-
+          {{ snapshot_audit_host_root_id | length > 0
+             and snapshot_audit_home_subvol_id | length > 0
+             and snapshot_audit_host_root_id == snapshot_audit_home_subvol_id }}
+        # Check 4: the snapshot subvolume is the filesystem default, so the
+        # host boots into it without any subvol= on the kernel command line.
+        snapshot_audit_root_is_default: >-
+          {{ snapshot_audit_default_subvol_id | length > 0
+             and snapshot_audit_root_subvol_id | length > 0
+             and snapshot_audit_default_subvol_id == snapshot_audit_root_subvol_id }}
+        snapshot_audit_home_is_default: >-
+          {{ snapshot_audit_default_subvol_id | length > 0
+             and snapshot_audit_home_subvol_id | length > 0
+             and snapshot_audit_default_subvol_id == snapshot_audit_home_subvol_id }}
+        # Check 5: the kernel was told to boot from inside this snapshot.
+        snapshot_audit_kernel_boots_snapshot: >-
+          {{ snapshot_audit_kernel_subvol | length > 0
+             and snapshot_audit_kernel_subvol
+                 in [snapshot_audit_root_subvol_path,
+                     snapshot_audit_home_subvol_path] }}
+        # Check 7: the path the host booted from is a snapshot subvolume.
+        snapshot_audit_root_path_is_snapshot: >-
+          {{ (snapshot_audit_host_root_path | length > 0
+              and snapshot_audit_root_subvol_path | length > 0
+              and snapshot_audit_host_root_path == snapshot_audit_root_subvol_path)
+             or (snapshot_audit_host_root_path | length > 0
+                 and snapshot_audit_home_subvol_path | length > 0
+                 and snapshot_audit_host_root_path == snapshot_audit_home_subvol_path) }}
+
+    - name: Collect the boot state findings
+      ansible.builtin.set_fact:
+        snapshot_audit_skipped_reason: ''
+        snapshot_audit_findings: >-
+          {{ ([ 'the @ subvolume is the subvolume this host booted from'
+                if (snapshot_audit_root_is_live | bool) else '' ]
+              + [ 'the @home subvolume is the subvolume this host booted from'
+                  if (snapshot_audit_home_is_live | bool) else '' ]
+              + [ 'the @ subvolume is the default subvolume of this filesystem'
+                  if (snapshot_audit_root_is_default | bool) else '' ]
+              + [ 'the @home subvolume is the default subvolume of this filesystem'
+                  if (snapshot_audit_home_is_default | bool) else '' ]
+              + [ 'the kernel command line boots from inside this snapshot (subvol='
+                  ~ snapshot_audit_kernel_subvol ~ ')'
+                  if (snapshot_audit_kernel_boots_snapshot | bool) else '' ]
+              + [ 'the subvolume this host booted from is inside this snapshot ('
+                  ~ snapshot_audit_host_root_path ~ ')'
+                  if (snapshot_audit_root_path_is_snapshot | bool) else '' ])
+             | reject('equalto', '') | list }}
+
+    - name: Report a boot state with no overlap
+      ansible.builtin.debug:
+        msg: >-
+          Boot state    : the host booted from subvol
+          '{{ snapshot_audit_host_root_path | default('the top-level', true) }}',
+          default subvolume ID {{ snapshot_audit_default_subvol_id | default('unknown', true) }},
+          snapshot @ ID {{ snapshot_audit_root_subvol_id | default('unknown', true) }};
+          no overlap with the snapshot being restored.
+      when: snapshot_audit_findings | length == 0
+
+# An audit that did not run has to leave the same contract behind: an empty
+# finding list, so the caller never reads a stale verdict from an earlier run.
+- name: Record that the audit did not run
+  ansible.builtin.set_fact:
+    snapshot_audit_findings: []
+    snapshot_audit_skipped_reason: >-
+      {{ snapshot_root_dir }} lives on
+      {{ snapshot_audit_snapshot_source.stdout | default('an unknown device', true) | trim }}
+      while the host root lives on
+      {{ snapshot_audit_root_source.stdout | default('an unknown device', true) | trim }},
+      and subvolume IDs are only comparable within one filesystem
+  when: not (snapshot_audit_same_filesystem | default(false) | bool)
+
+- name: Report that the boot state audit did not run
+  ansible.builtin.debug:
+    msg: "Boot state    : not audited - {{ snapshot_audit_skipped_reason }}."
+  when: snapshot_audit_skipped_reason | default('') | length > 0
+
+- name: Warn when the host boot state overlaps the snapshot
+  ansible.builtin.debug:
+    msg: >-
+      Warning: the host boot state overlaps snapshot {{ resolved_snapshot }}:
+      {{ snapshot_audit_findings | join('; ') }}. This is not a Timeshift
+      snapshot of a past boot, it is a subvolume the host is running from.
+      Restoring it captures the current live state instead.
+  when:
+    - snapshot_audit_findings | default([]) | length > 0
+    - not (snapshot_refuse_live_boot_state | default(false) | bool)
+
+- name: Refuse a snapshot the host is currently running from
+  ansible.builtin.assert:
+    that:
+      - snapshot_audit_findings | default([]) | length == 0
+    fail_msg: >-
+      Snapshot {{ resolved_snapshot }} is not an independent Timeshift snapshot:
+      {{ snapshot_audit_findings | join('; ') }}. Restoring it would capture the
+      live state of this host instead of a past boot. Restore another snapshot,
+      or set snapshot_refuse_live_boot_state=false to accept this overlap.
+    quiet: true
+  when: snapshot_refuse_live_boot_state | default(false) | bool

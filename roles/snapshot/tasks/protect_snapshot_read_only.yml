@@ -1,0 +1,39 @@
+---
+# `btrfs send` requires every subvolume in the stream to carry the read-only
+# flag: a read-only *mount* is explicitly not enough (btrfs-send(8)), because
+# another writable mount of the same subvolume could change it mid-send. Timeshift
+# creates read-write snapshots - it restores by copying files, never by send - so
+# a Timeshift snapshot is refused by `btrfs send` until @ and @home hold ro=true.
+#
+# This step flips that flag. It is metadata on the user's own BTRFS, and
+# Timeshift keeps listing, restoring and deleting the snapshot normally
+# afterwards. It is opt-in because it mutates a snapshot the user owns.
+#
+# The subvolume is mounted read-write at a scratch point under /run. The shared
+# top-level is never remounted: it is what holds the live @ and @home of the
+# host, and it stays read-only for the whole run.
+#
+# One subvolume per iteration: a block cannot carry `loop`, so the work lives in
+# protect_snapshot_subvolume.yml and is included once per subvolume.
+
+- name: Protect the snapshot subvolumes for btrfs send
+  block:
+    - name: Create the scratch mount point used to protect the subvolumes
+      ansible.builtin.file:
+        path: "{{ snapshot_protect_scratch }}"
+        state: directory
+        mode: "0755"
+
+    - name: Set ro=true on each snapshot subvolume that btrfs send requires
+      ansible.builtin.include_tasks: protect_snapshot_subvolume.yml
+      loop:
+        - "{{ snapshot_root }}"
+        - "{{ snapshot_home }}"
+      loop_control:
+        label: "{{ item }}"
+
+  always:
+    - name: Remove the scratch mount point
+      ansible.builtin.file:
+        path: "{{ snapshot_protect_mount_point }}"
+        state: absent

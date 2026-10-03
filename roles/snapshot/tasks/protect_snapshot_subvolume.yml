@@ -1,0 +1,140 @@
+---
+# One subvolume of protect_snapshot_read_only.yml, iterated through
+# include_tasks. `item` is the snapshot @ or @home path.
+
+- name: Protect the snapshot subvolume for btrfs send
+  block:
+    - name: Read the read-only property before protecting the subvolume
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - property
+          - get
+          - -t
+          - subvol
+          - "{{ item }}"
+          - ro
+      register: snapshot_protect_before
+      changed_when: false
+      failed_when: false
+
+    # Nothing to do for a subvolume that already carries the flag.
+    - name: Skip the subvolume that is already protected
+      ansible.builtin.set_fact:
+        snapshot_protect_needed: >-
+          {{ 'ro=true' not in
+             (snapshot_protect_before.stdout | default('') | replace(' ', '')) }}
+
+    - name: Resolve the subvolume ID needed to mount it read-write
+      when: snapshot_protect_needed | bool
+      block:
+        # `btrfs subvolume show` does not report the ID through the read-only
+        # top-level mount this run depends on, so the ID comes from the tree
+        # scan, which reads fine on a read-only mount.
+        - name: List the subvolumes of the filesystem holding the snapshot
+          ansible.builtin.command:
+            argv:
+              - btrfs
+              - subvolume
+              - list
+              - --raw
+              - --output
+              - id,path
+              - "{{ snapshot_top_mount }}"
+          register: snapshot_protect_list
+          changed_when: false
+          failed_when: false
+
+        - name: Read the subvolume ID reported by btrfs for reference
+          ansible.builtin.command:
+            argv:
+              - btrfs
+              - subvolume
+              - show
+              - "{{ item }}"
+          register: snapshot_protect_show
+          changed_when: false
+          failed_when: false
+
+        - name: Resolve the subvolume ID from the btrfs tree scan
+          ansible.builtin.set_fact:
+            snapshot_protect_subvol_id: >-
+              {{ (snapshot_protect_list.stdout | default('', true) | split('\n')
+                  | select('search',
+                           '[ ]' ~ (item | regex_replace(
+                             '^' ~ (snapshot_top_mount | regex_escape) ~ '/', ''
+                           ) | regex_escape) ~ '$')
+                  | list | first | default('', true)).split(' ') | first }}
+
+        - name: Fail when the subvolume ID cannot be resolved
+          ansible.builtin.assert:
+            that:
+              - snapshot_protect_subvol_id | length > 0
+            fail_msg: >-
+              Could not resolve the subvolume ID of {{ item }} to protect it.
+              `btrfs subvolume list --raw --output=id,path` on
+              {{ snapshot_top_mount }} returned
+              rc={{ snapshot_protect_list.rc | default('n/a') }},
+              stderr='{{ snapshot_protect_list.stderr | default('') | trim }}'
+              and these subvolumes:
+              {{ snapshot_protect_list.stdout_lines | default([]) | join(', ') }}.
+              `btrfs subvolume show` returned
+              rc={{ snapshot_protect_show.rc | default('n/a') }},
+              stdout='{{ snapshot_protect_show.stdout | default('') | trim }}'.
+              Set ro=true manually with
+              `btrfs property set -t subvol {{ item }} ro true`.
+            quiet: true
+
+        - name: Mount the snapshot subvolume read-write at the scratch point
+          ansible.builtin.command:
+            argv:
+              - mount
+              - --types
+              - btrfs
+              - --options
+              - "subvolid={{ snapshot_protect_subvol_id }}"
+              - "{{ snapshot_device }}"
+              - "{{ snapshot_protect_scratch }}"
+          changed_when: true
+
+        - name: Set the read-only flag on the snapshot subvolume
+          ansible.builtin.command:
+            argv:
+              - btrfs
+              - property
+              - set
+              - -t
+              - subvol
+              - "{{ snapshot_protect_scratch }}"
+              - ro
+              - "true"
+          changed_when: true
+
+    - name: Record the snapshot subvolume as protected
+      ansible.builtin.set_fact:
+        snapshot_protected_subvolumes: >-
+          {{ snapshot_protected_subvolumes | default([]) + [item] }}
+
+  always:
+    - name: Check whether the scratch point is mounted
+      ansible.builtin.command:
+        argv:
+          - mountpoint
+          - --quiet
+          - "{{ snapshot_protect_scratch }}"
+      register: snapshot_protect_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Release the read-write mount of the snapshot subvolume
+      ansible.builtin.command:
+        argv:
+          - umount
+          - "{{ snapshot_protect_scratch }}"
+      when: snapshot_protect_probe.rc == 0
+      changed_when: true
+
+- name: Remove the scratch mount point
+  ansible.builtin.file:
+    path: "{{ snapshot_protect_scratch }}"
+    state: absent

@@ -1,0 +1,84 @@
+---
+# Fallback for the common `subvol=/@` layout, where the BTRFS top-level
+# (subvolid=5) is not mounted: Timeshift keeps its snapshots in that top-level
+# (siblings of @ and @home), so there is no way to reach them from /.
+#
+# Mount it read-only under /run (tmpfs, gone on reboot) and publish
+# `snapshot_top_mount_temporary` so the caller can release it again. mount(8) is
+# used directly on purpose: ansible.posix.mount would rewrite /etc/fstab.
+
+- name: Create the ephemeral BTRFS top-level mount point
+  ansible.builtin.file:
+    path: "{{ snapshot_top_mount_point }}"
+    state: directory
+    mode: "0755"
+
+# Claimed before the mount is attempted, not after it succeeds: a mount that
+# fails half-way still has to be handed to the play that owns the teardown, or
+# the host keeps a read-only top-level mount after an aborted preflight.
+# snapshot_top_mount_owned is what unmount_btrfs_top.yml gates on, so both
+# flags are published here.
+- name: Mark the BTRFS top-level mount as owned by this run
+  ansible.builtin.set_fact:
+    snapshot_top_mount: "{{ snapshot_top_mount_point }}"
+    snapshot_top_mount_temporary: true
+    snapshot_top_mount_owned: true
+
+- name: Mount the BTRFS top-level read-only
+  ansible.builtin.command:
+    argv:
+      - mount
+      - --types
+      - btrfs
+      - --options
+      - "{{ snapshot_top_mount_opts | default('subvolid=5,ro') }}"
+      - "{{ snapshot_device }}"
+      - "{{ snapshot_top_mount_point }}"
+  register: snapshot_top_mount_cmd
+  changed_when: true
+  failed_when: false
+
+- name: Fail with the mount error when the BTRFS top-level cannot be mounted
+  ansible.builtin.assert:
+    that:
+      - snapshot_top_mount_cmd.rc == 0
+    fail_msg: >-
+      Could not mount the BTRFS top-level (subvolid=5) of
+      {{ snapshot_device }} at {{ snapshot_top_mount_point }}
+      (mount rc={{ snapshot_top_mount_cmd.rc }}):
+      {{ snapshot_top_mount_cmd.stderr | default('') | trim
+         | default('mount reported no error on stderr', true) }}.
+      Mount it manually and re-run, point timeshift_root at an existing
+      snapshot directory, or set timeshift_autodetect_mount_top=false to
+      disable this fallback.
+    quiet: true
+
+- name: Adopt the ephemeral BTRFS top-level mount
+  ansible.builtin.set_fact:
+    snapshot_top_mount: "{{ snapshot_top_mount_point }}"
+    snapshot_top_mount_temporary: true
+    snapshot_top_mount_owned: true
+
+- name: Check whether the BTRFS top-level mount is reachable
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --output
+      - SOURCE,TARGET,FSROOT,OPTIONS
+      - --mountpoint
+      - "{{ snapshot_top_mount_point }}"
+  register: snapshot_top_mount_probe
+  changed_when: false
+  failed_when: false
+
+- name: Fail when the BTRFS top-level cannot be reached
+  ansible.builtin.assert:
+    that:
+      - snapshot_top_mount_probe.rc == 0
+      - snapshot_top_mount_probe.stdout | trim | length > 0
+    fail_msg: >-
+      Mounted {{ snapshot_top_mount_point }} but findmnt reports no BTRFS
+      top-level there. The mount is released by the play before the failure
+      propagates.
+    quiet: true

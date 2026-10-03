@@ -10,26 +10,73 @@ timeshift_root: auto
 # Mainly a test seam for synthetic BTRFS sandboxes.
 timeshift_device: ""
 
-# Temporary mount used when auto-detection finds no mounted BTRFS top-level.
+# Timeshift stores snapshots in the BTRFS top-level (subvolid=5), next to @ and
+# @home, so they are unreachable while that subvolume is not mounted - the usual
+# `subvol=/@` layout has no top-level mount. When true, auto-detection mounts it
+# read-only under /run for the duration of the playbook and releases it at the
+# end. Set to false to keep auto-detection strictly read-only and require a
+# pre-existing top-level mount (or an explicit timeshift_root).
+timeshift_autodetect_mount_top: true
+
+# Where the ephemeral top-level mount is placed when the host has none. /run is
+# a tmpfs, so the mountpoint never survives a reboot.
 snapshot_top_mount_point: /run/arch-timeshift-vm/btrfs-top
+
+# Mount options for that ephemeral mount. Read-only is enough because the
+# pipeline only reads snapshots from the source (staging copies live under
+# work_dir). Note this is orthogonal to `btrfs send`, which requires the
+# subvolume itself to carry ro=true - see snapshot_protect_source_read_only.
+snapshot_top_mount_opts: "subvolid=5,ro"
+
+# Scratch mount point used by snapshot_protect_source_read_only to set ro=true on
+# the snapshot subvolume. Like the top-level mount it lives under /run.
+snapshot_protect_mount_point: /run/arch-timeshift-vm/protect
+snapshot_protect_scratch: "{{ snapshot_protect_mount_point }}/subvolume"
+
+# `btrfs send` refuses a read-write subvolume, and a read-only mount of it is
+# explicitly not enough (btrfs-send(8)). Timeshift creates read-write snapshots,
+# so this run has to set ro=true on the snapshot @ and @home before streaming
+# them. That writes to the user's own BTRFS, hence opt-in: with the default the
+# preflight fails and prints the exact commands instead of mutating a snapshot
+# the user owns. Timeshift keeps listing, restoring and deleting the snapshot
+# after the flag is set.
+snapshot_protect_source_read_only: false
+
+# Read /etc/timeshift/timeshift.json to report the device Timeshift backs up.
+# Only used for diagnostics; a missing or unreadable file is not fatal.
+snapshot_timeshift_config: /etc/timeshift/timeshift.json
+
+# Boot-state audit: report when the snapshot being restored is also the
+# subvolume this host booted from, the filesystem default subvolume, or the
+# subvolume named by the kernel command line. Findings are warnings by default
+# (booting from a snapshot is a legitimate recovery mode and this pipeline never
+# deletes snapshots). Set true to refuse such a snapshot outright.
+snapshot_refuse_live_boot_state: false
 
 # Commands required by the full restore pipeline. Fail early with a single
 # clear message when any is missing.
 snapshot_required_commands:
   - btrfs
+  - blkid
   - findmnt
   - mount
-  - umount
+  - mountpoint
   - realpath
   - qemu-img
   - qemu-nbd
   - sgdisk
   - mkfs.fat
+  - umount
   - virsh
   - virt-xml-validate
   - grub-install
   - efibootmgr
   - arch-chroot
+
+# What the confirmation gate reports about the current run. The gate is shared
+# by the destructive restore and the read-only preflight, so each caller names
+# its own scope instead of the message always claiming a disk is overwritten.
+confirm_scope_note: run creates and overwrites a VM disk
 
 # Extra free-space headroom (percent) required on the VM disk filesystem.
 disk_space_headroom_percent: 10

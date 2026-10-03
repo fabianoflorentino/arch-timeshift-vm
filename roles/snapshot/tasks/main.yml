@@ -2,6 +2,7 @@
 - name: Initialize snapshot mount lifecycle state
   ansible.builtin.set_fact:
     snapshot_top_mount_owned: false
+    snapshot_top_mount_temporary: false
     snapshot_role_error: ""
     snapshot_cleanup_error: ""
 

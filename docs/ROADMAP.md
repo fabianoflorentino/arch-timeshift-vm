@@ -12,7 +12,7 @@ Implementado (hardenização Fase 6.2):
 - S1 · sudo escopado ao wrapper (`sudoers/arch-timeshift-vm`, instalável via
   `arch-timeshift-vm install`). Limitação documentada: permissões por binário
   não casam com o `/bin/sh -c` do `become` do Ansible.
-- S2 · proveniência obrigatória (`created`/`hostname`) e manifest sha256 dos
+- S2 · proveniência obrigatória (`created`/`sys-uuid`) e manifest sha256 dos
   payloads de boot.
 - S3 · rede isolada por padrão (`vm_network_mode: isolated`).
 - S4 · log de auditoria (`ANSIBLE_LOG_PATH` por execução no wrapper) + resumo
@@ -58,7 +58,7 @@ systemd processadas via `systemctl --root`, GRUB instalado. Um snapshot
 comprometido é superfície de injeção.
 
 - Ancorar provenance: snapshot deve estar em subvolume confiável e o
-  `info.json` deve ser consistente (data/hostname).
+  `info.json` deve ser consistente (data e `sys-uuid`).
 - Manifest sha256 do par `vmlinuz`/`initramfs` escolhido, conferido antes de
   semear a ESP; recusar conteúdo inesperado nas units habilitadas.
 - Garantir regeneração de `/etc/machine-id` e hostname do clone (evita

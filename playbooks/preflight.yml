@@ -1,11 +1,27 @@
 ---
-# Preflight validation of the restore pipeline. Runs only the read-only
-# snapshot role: snapshot resolution, provenance, safety gates and free
-# space checks. Nothing is mutated on the host.
-- name: Preflight validation of the restore pipeline (read-only)
+# Preflight validation of the restore pipeline. Runs only the snapshot role:
+# snapshot resolution, provenance, safety gates and free space checks. No VM
+# disk is touched. The one mutation is the ephemeral read-only BTRFS top-level
+# mount under /run, which is released at the end of the run - including when a
+# guard aborts the play, which is the case that used to leave the host holding a
+# top-level mount.
+#
+# The mount cannot be released by the snapshot role itself: the restore role
+# later feeds `btrfs send` from the same paths, so the mount has to outlive the
+# role and be owned by the play instead.
+- name: Preflight validation of the restore pipeline
   hosts: localhost
   become: true
   gather_facts: true
 
-  roles:
-    - snapshot
+  tasks:
+    - name: Validate the snapshot and the destructive paths
+      block:
+        - name: Run the snapshot role
+          ansible.builtin.include_role:
+            name: snapshot
+      always:
+        - name: Release the ephemeral BTRFS top-level mount
+          when: snapshot_top_mount_temporary | default(false) | bool
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../roles/snapshot/tasks/unmount_btrfs_top.yml"

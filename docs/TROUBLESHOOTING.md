@@ -4,28 +4,71 @@ Diagnóstico das falhas mais comuns, por área.
 
 ## Snapshot
 
+### "Could not find a mounted BTRFS top-level (subvolid=5) subvolume for ..."
+
+O layout `subvol=/@` monta `@` em `/`, e não o topo (subvolid=5). O Timeshift
+guarda os snapshots no topo, como irmãos de `@`/`@home`, então eles ficam
+invisíveis para o `/` enquanto o topo não estiver montado. A mensagem lista os
+mounts BTRFS observados — normalmente só `/@` e `/@home`.
+
+Confirme o estado real:
+
+```bash
+findmnt --raw --noheadings --output SOURCE,TARGET,FSROOT --types btrfs
+# esperado para o auto-detect: uma linha com FSROOT "/"
+```
+
+Os snapshots existem mesmo sem o mount; o próprio Timeshift monta o device
+temporariamente para criá-los:
+
+```bash
+grep -h "loading snapshots from" /var/log/timeshift/*_backup.log | tail -1
+```
+
+Soluções, da mais permanente para a mais alinhada ao uso pontual:
+
+```bash
+# 1. Montar o topo permanentemente (recomendado)
+echo "UUID=$(blkid -s UUID -o value /dev/nvme0n1p2) /mnt/btrfs-top btrfs subvolid=5,ro,x-systemd.automount,nofail 0 0" \
+  | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload
+
+# 2. Auto-mount temporário, montado e desmontado pelo próprio preflight
+arch-timeshift-vm preflight -e confirm_restore=true
+
+# 3. Sem mount algum: aponte direto para o diretório de snapshots
+arch-timeshift-vm preflight -e confirm_restore=true \
+  -e timeshift_root=/mnt/btrfs-top/timeshift-btrfs/snapshots
+```
+
+Para desligar o fallback e falhar cedo quando o topo não estiver montado:
+
+```bash
+arch-timeshift-vm preflight -e confirm_restore=true -e timeshift_autodetect_mount_top=false
+```
+
+### "Timeshift backs up device UUID X but auto-detection resolved Y ..."
+
+O UUID em `backup_device_uuid` (`/etc/timeshift/timeshift.json`) não é o do
+dispositivo derivado de `/` — o snapshot viria do filesystem errado. Aponte
+`-e timeshift_device=/dev/<dispositivo-correto>` ou corrija a config do
+Timeshift.
+
 ### "Timeshift snapshot root ... does not exist"
 
-With `timeshift_root: auto`, the snapshot role selects the BTRFS top-level
-mount for the root filesystem (or `timeshift_device`, if set) and expects the
-Timeshift directory at `<top-level mount>/timeshift-btrfs/snapshots`. If no
-matching top-level mount is already present, the restore playbook mounts it
-temporarily at `/run/arch-timeshift-vm/btrfs-top` and releases it after the
-pipeline, including on failure. Check which BTRFS filesystems and top-level
-mounts are available:
+Com `timeshift_root: auto`, o topo já foi montado (temporário ou não), mas o
+diretório `timeshift-btrfs/snapshots` não existe nele. Confirme se os
+snapshots estão onde o papel diz:
 
 ```bash
 findmnt --types btrfs --output SOURCE,TARGET,FSROOT
-sudo mkdir -p /mnt/btrfs-top
-sudo mount -o subvolid=5 /dev/<snapshot-device> /mnt/btrfs-top
 ls -la /mnt/btrfs-top/timeshift-btrfs/snapshots
 ```
 
-If the snapshots are on a different BTRFS filesystem, set
-`timeshift_device` to that filesystem's source so the playbook mounts the
-correct top-level. For a nonstandard snapshot location, set `timeshift_root`
-directly to its `snapshots` directory. The manual mount above is only for
-diagnosis; replace the placeholder with the actual snapshot device.
+Se os snapshots estiverem em outro BTRFS, aponte `timeshift_device` para a
+fonte daquele filesystem; para um caminho não padrão, aponte `timeshift_root`
+direto para o diretório `snapshots`. O mount manual acima serve só para
+diagnóstico: substitua o placeholder pelo device real.
 
 ### "Snapshot 'X' was not found under ..."
 
@@ -55,6 +98,42 @@ btrfs property get -t subvol /mnt/btrfs-top/timeshift-btrfs/snapshots/2026-09-20
 Se `ro=false`, selecione outro snapshot ou crie um novo com o Timeshift
 (`O` snapshot). Para um fixture de teste, é possível relaxar a validação com
 `snapshot_source_validate_btrfs=false`.
+
+A mensagem também traz `rc=`, `stdout=` e `stderr=` da leitura: se `rc != 0`, o
+problema é o comando (caminho errado, `btrfs-progs` antigo, snapshot não
+acessível pelo mount do topo) e não a proteção do subvolume.
+
+### "the host boot state overlaps snapshot ..."
+
+O `@` ou o `@home` do snapshot é o subvolume de onde o host está rodando — o
+snapshot não representa um boot passado, e restaurá-lo devolveria o estado atual.
+A mensagem lista qual verificação casou (`rootid`, `get-default`, `subvol=` do
+kernel, `FSROOT` do host). Para inspecionar:
+
+```bash
+cat /sys/fs/btrfs/rootid            # subvolume ID do @ do host
+cat /proc/cmdline                    # subvol=/... bootado
+findmnt --noheadings --output SOURCE,FSROOT /
+btrfs subvolume get-default /mnt/btrfs-top
+```
+
+Escolha outro snapshot ou aceite explicitamente com
+`-e snapshot_refuse_live_boot_state=false`.
+
+### "not audited" no relatório de boot state
+
+O snapshot está em outro filesystem que o `@` do host. IDs de subvolume só são
+comparáveis dentro do mesmo BTRFS, então o `preflight` não emite achados em vez
+de comparar números que colidiriam por acaso. Isso não é um erro.
+
+### O host ficou com o topo BTRFS montado em `/run`
+
+Não deveria mais acontecer: `preflight.yml`/`restore.yml` liberam o mount em
+`always`. Se um run foi interrompido com `SIGKILL`, limpe com:
+
+```bash
+arch-timeshift-vm cleanup -e confirm_restore=true
+```
 
 ### "Snapshot ... is not a bootable candidate"
 

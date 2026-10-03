@@ -1,7 +1,9 @@
 ---
-# Select the BTRFS top-level mount (fsroot "/") that belongs to snapshot_device
-# from an already-registered findmnt result in `snapshot_btrfs_mounts`.
-# An empty result lets the caller mount the top-level temporarily if needed.
+# Resolve the BTRFS top-level mount (fsroot "/") that belongs to snapshot_device
+# from an already-registered findmnt result in `snapshot_btrfs_mounts`. When the
+# host has no such mount, mount one read-only instead (mount_btrfs_top.yml).
+# Kept in its own task file so the selector can be unit-tested without a real
+# BTRFS filesystem.
 
 - name: Select the BTRFS top-level mount (fsroot "/") for the snapshot device
   ansible.builtin.set_fact:
@@ -12,3 +14,86 @@
              '^' ~ (snapshot_device | regex_escape) ~ '(\[[^]]*\])?\s+\S+\s+/\s*$')
          | map('regex_replace', '^\S+\s+(\S+)\s+/\s*$', '\1')
          | list | first | default('') }}
+    snapshot_top_mount_temporary: false
+
+- name: Inspect the Timeshift configuration
+  ansible.builtin.slurp:
+    src: "{{ snapshot_timeshift_config | default('/etc/timeshift/timeshift.json') }}"
+  register: snapshot_timeshift_config_raw
+  changed_when: false
+  failed_when: false
+
+- name: Parse the Timeshift configuration
+  ansible.builtin.set_fact:
+    snapshot_timeshift_config_parsed: >-
+      {{ (snapshot_timeshift_config_raw.content | default('') | b64decode | from_json)
+         if (snapshot_timeshift_config_raw.content | default('')) | length > 0 else {} }}
+  when: snapshot_timeshift_config_raw is not skipped
+
+- name: Read the UUID of the device holding the snapshots
+  ansible.builtin.command:
+    argv:
+      - blkid
+      - --match-token
+      - UUID
+      - --output
+      - value
+      - "{{ snapshot_device }}"
+  register: snapshot_device_uuid
+  changed_when: false
+  failed_when: false
+
+- name: Publish the device identity facts
+  ansible.builtin.set_fact:
+    snapshot_device_uuid_value: "{{ snapshot_device_uuid.stdout | default('') | trim }}"
+    snapshot_timeshift_btrfs_mode: >-
+      {{ (snapshot_timeshift_config_parsed | default({})).get('btrfs_mode', false) | bool }}
+    snapshot_timeshift_device_uuid: >-
+      {{ (snapshot_timeshift_config_parsed | default({})).get('backup_device_uuid', '') | trim }}
+
+- name: Mount the BTRFS top-level when the host does not expose it
+  when:
+    - snapshot_top_mount | length == 0
+    - timeshift_autodetect_mount_top | default(true) | bool
+  block:
+    - name: Mount the BTRFS top-level read-only
+      ansible.builtin.include_tasks: mount_btrfs_top.yml
+
+- name: Fail when the BTRFS top-level subvolume is not mounted
+  ansible.builtin.assert:
+    that:
+      - snapshot_top_mount | length > 0
+    fail_msg: >-
+      Could not find a mounted BTRFS top-level (subvolid=5) subvolume for
+      {{ snapshot_device }}. Observed BTRFS mounts:
+      {{ snapshot_btrfs_mounts.stdout_lines | default([]) | join('; ') }}.
+      Timeshift stores snapshots in that top-level
+      ({{ snapshot_device }}/timeshift-btrfs/snapshots), next to @ and @home, so
+      they stay invisible while it is unmounted
+      {% if snapshot_timeshift_btrfs_mode | default(false) %}
+      (Timeshift has btrfs_mode=true{% if snapshot_timeshift_device_uuid | length > 0 %},
+      backing up device UUID {{ snapshot_timeshift_device_uuid }}{% endif %})
+      {% endif %}
+      . Mount it persistently, for example:
+      `echo "{{ snapshot_device }}
+      {{ snapshot_top_mount_point | default('/run/arch-timeshift-vm/btrfs-top') }} btrfs
+      {{ snapshot_top_mount_opts | default('subvolid=5,ro') }},x-systemd.automount,nofail 0 0" >>
+      /etc/fstab && systemctl daemon-reload`, or set timeshift_root explicitly
+      (auto-detection with timeshift_autodetect_mount_top=false is disabled by
+      configuration).
+    quiet: true
+
+- name: Refuse to restore from a device Timeshift does not back up
+  ansible.builtin.assert:
+    that:
+      - snapshot_timeshift_device_uuid | length == 0
+        or snapshot_device_uuid_value | length == 0
+        or snapshot_timeshift_device_uuid == snapshot_device_uuid_value
+    fail_msg: >-
+      Timeshift backs up device UUID {{ snapshot_timeshift_device_uuid }} but
+      auto-detection resolved {{ snapshot_device }}
+      (UUID {{ snapshot_device_uuid_value | default('unknown') }}). Refusing to
+      stage snapshots from the wrong filesystem: set timeshift_device
+      explicitly, or fix backup_device_uuid in
+      {{ snapshot_timeshift_config | default('/etc/timeshift/timeshift.json') }}.
+    quiet: true

@@ -36,6 +36,12 @@
   changed_when: false
   failed_when: false
 
+- name: Release the ephemeral BTRFS top-level mount
+  ansible.builtin.include_tasks:
+    file: "{{ role_path }}/../snapshot/tasks/unmount_btrfs_top.yml"
+  vars:
+    snapshot_top_mount_point: "{{ e2e_cleanup_top_mount_point }}"
+
 - name: Disconnect NBD devices serving the E2E workdir
   ansible.builtin.shell: |
     set -uo pipefail

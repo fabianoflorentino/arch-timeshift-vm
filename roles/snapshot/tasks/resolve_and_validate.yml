@@ -1,13 +1,21 @@
 ---
-# Resolve and validate the snapshot and the destructive VM disk path.
+# Resolve and validate the snapshot and the destructive VM disk path. The role
+# reads state only, with one exception: when the host has no BTRFS top-level
+# mount it mounts one read-only under /run for the duration of the run (see
+# timeshift_autodetect_mount_top). Nothing else is mutated, and the caller
+# releases that mount in its always/cleanup step.
+#
+# Kept in its own task file so the preflight can be split out of the role
+# entrypoint, which wraps it in block/rescue/always to guarantee the temporary
+# mount is released even when a guard aborts the run.
 
 - name: Require explicit confirmation
   ansible.builtin.assert:
     that:
       - confirm_restore | default(false) | bool
     fail_msg: >-
-      Refusing to run: this pipeline creates and overwrites a VM disk. Re-run
-      with -e confirm_restore=true only after reviewing group_vars/all.yml.
+      Refusing to run: this {{ confirm_scope_note }}. Re-run with
+      -e confirm_restore=true only after reviewing group_vars/all.yml.
     quiet: true
 
 - name: Validate vm_name
@@ -55,7 +63,7 @@
         snapshot_device: >-
           {{ timeshift_device
              if (timeshift_device | default('') | length) > 0
-             else (snapshot_root_source.stdout | trim | regex_replace('\\[.*\\]$', '')) }}
+             else (snapshot_root_source.stdout | trim | regex_replace('\[[^]]*\]$', '')) }}
 
     - name: List all BTRFS mounts
       ansible.builtin.command:
@@ -66,79 +74,8 @@
       changed_when: false
       failed_when: false
 
-    - name: Select an existing BTRFS top-level mount
+    - name: Resolve the BTRFS top-level mount for the snapshot device
       ansible.builtin.include_tasks: select_btrfs_top_mount.yml
-
-    - name: Prepare an ephemeral BTRFS top-level mount when needed
-      when: snapshot_top_mount | length == 0
-      block:
-        - name: Check whether the temporary mount point is already in use
-          ansible.builtin.command:
-            argv:
-              - findmnt
-              - --noheadings
-              - --output
-              - TARGET
-              - --mountpoint
-              - "{{ snapshot_top_mount_point }}"
-          register: snapshot_top_mountpoint_check
-          changed_when: false
-          failed_when: false
-
-        - name: Require an unused temporary mount point
-          ansible.builtin.assert:
-            that:
-              - snapshot_top_mountpoint_check.rc != 0
-            fail_msg: >-
-              Temporary BTRFS mount point '{{ snapshot_top_mount_point }}' is
-              already mounted, but it is not the top-level mount selected for
-              {{ snapshot_device }}. Unmount it or choose another
-              snapshot_top_mount_point.
-            quiet: true
-
-        - name: Create the temporary BTRFS mount point
-          ansible.builtin.file:
-            path: "{{ snapshot_top_mount_point }}"
-            state: directory
-            mode: "0755"
-
-        - name: Mount the BTRFS top-level temporarily  # noqa: command-instead-of-module
-          ansible.builtin.command:
-            argv:
-              - mount
-              - --types
-              - btrfs
-              - --options
-              - subvolid=5
-              - "{{ snapshot_device }}"
-              - "{{ snapshot_top_mount_point }}"
-          register: snapshot_top_mount_result
-          changed_when: true
-
-        - name: Record ownership of the temporary top-level mount
-          ansible.builtin.set_fact:
-            snapshot_top_mount_owned: true
-
-        - name: Refresh the BTRFS mount list after mounting the top-level
-          ansible.builtin.command:
-            cmd: >-
-              findmnt --raw --noheadings --output SOURCE,TARGET,FSROOT
-              --types btrfs
-          register: snapshot_btrfs_mounts
-          changed_when: false
-
-        - name: Select the newly mounted BTRFS top-level
-          ansible.builtin.include_tasks: select_btrfs_top_mount.yml
-
-    - name: Assert the BTRFS top-level mount was found
-      ansible.builtin.assert:
-        that:
-          - snapshot_top_mount | length > 0
-        fail_msg: >-
-          Could not find or mount a BTRFS top-level for {{ snapshot_device }}.
-          Check that the device is available and that the task has permission
-          to mount it.
-        quiet: true
 
     - name: Derive the Timeshift snapshot root from the top-level mount
       ansible.builtin.set_fact:
@@ -244,20 +181,43 @@
       BTRFS snapshot listing the @ and @home subvolumes.
     quiet: true
 
+# Timeshift records origin as `created` (epoch) plus `sys-uuid` (DMI UUID) and
+# `sys-distro`. It has never written a `hostname` key, and a DMI UUID survives a
+# hostname rename, so it is the stronger identity of the two.
 - name: Assert the snapshot declares provenance metadata
   ansible.builtin.assert:
     that:
       - snapshot_info['created'] | default('') | length > 0
-      - snapshot_info['hostname'] | default('') | length > 0
+      - snapshot_info['sys-uuid'] | default('') | length > 0
     fail_msg: >-
-      Snapshot {{ resolved_snapshot }} is missing provenance in info.json
-      (created and/or hostname). Refuse snapshots of unknown origin.
+      Snapshot {{ resolved_snapshot }} does not declare its origin: info.json
+      must carry 'created' and 'sys-uuid'. Keys present in
+      {{ snapshot_info_file }}: {{ snapshot_info.keys() | sort | join(', ') }}.
+    success_msg: "Snapshot provenance is complete"
     quiet: true
+
+# The hostname is not part of info.json; read it from the snapshot's own tree.
+# Informational only: a snapshot taken before /etc/hostname existed, or a
+# synthetic test tree, must not fail the preflight over a display label.
+- name: Read the hostname recorded inside the snapshot
+  ansible.builtin.slurp:
+    src: "{{ snapshot_root }}/etc/hostname"
+  register: snapshot_hostname_raw
+  changed_when: false
+  failed_when: false
 
 - name: Record snapshot provenance facts
   ansible.builtin.set_fact:
     snapshot_meta_created: "{{ snapshot_info['created'] | default('') }}"
-    snapshot_meta_hostname: "{{ snapshot_info['hostname'] | default('') }}"
+    snapshot_meta_created_human: >-
+      {{ '%Y-%m-%d %H:%M:%S' | strftime(snapshot_info['created'] | int)
+         if (snapshot_info['created'] | default('') | string) is match('^[0-9]+$')
+         else (snapshot_info['created'] | default('n/a')) }}
+    snapshot_meta_sys_uuid: "{{ snapshot_info['sys-uuid'] | default('') }}"
+    snapshot_meta_sys_distro: "{{ snapshot_info['sys-distro'] | default('') }}"
+    snapshot_meta_hostname: >-
+      {{ snapshot_hostname_raw.content | default('') | b64decode | trim
+         if (snapshot_hostname_raw.content | default('') | length) > 0 else '' }}
 
 - name: Detect the filesystem type of the snapshot root
   ansible.builtin.command:
@@ -282,6 +242,27 @@
       changed_when: false
       failed_when: false
 
+    - name: Assert the snapshot @ and @home are BTRFS subvolumes
+      ansible.builtin.assert:
+        that:
+          - snapshot_root_check.rc == 0
+          - snapshot_home_check.rc == 0
+        fail_msg: >-
+          Snapshot {{ resolved_snapshot }} is not a sendable BTRFS snapshot:
+          {{ snapshot_root }} and {{ snapshot_home }} must both be BTRFS
+          subvolumes. `btrfs send` can only stream subvolumes, and
+          {{ snapshot_root }} (rc={{ snapshot_root_check.rc | default('n/a') }})
+          or {{ snapshot_home }}
+          (rc={{ snapshot_home_check.rc | default('n/a') }}) is not one.
+        quiet: true
+
+    # Opt-in: btrfs send refuses a read-write subvolume, and Timeshift snapshots
+    # are read-write. See protect_snapshot_read_only.yml for why the flag has to
+    # live on the subvolume and not on the mount.
+    - name: Protect the snapshot subvolumes for btrfs send
+      when: snapshot_protect_source_read_only | bool
+      ansible.builtin.include_tasks: protect_snapshot_read_only.yml
+
     - name: Read the read-only property of the snapshot @ subvolume
       ansible.builtin.command:
         cmd: "btrfs property get -t subvol {{ snapshot_root }} ro"
@@ -289,16 +270,49 @@
       changed_when: false
       failed_when: false
 
-    - name: Assert @ and @home are subvolumes and @ is protected read-only
+    - name: Read the read-only property of the snapshot @home subvolume
+      ansible.builtin.command:
+        cmd: "btrfs property get -t subvol {{ snapshot_home }} ro"
+      register: snapshot_home_ro
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the snapshot is a sendable btrfs source
       ansible.builtin.assert:
         that:
-          - snapshot_root_check.rc == 0
-          - snapshot_home_check.rc == 0
+          # `btrfs property get -t subvol <path> ro` prints "ro=true", but the
+          # probes above swallow their rc, so a failed read would otherwise be
+          # reported as "not read-only" instead of "could not be read".
+          - snapshot_root_ro.rc == 0
           - "'ro=true' in (snapshot_root_ro.stdout | default('') | replace(' ', ''))"
+          - snapshot_home_ro.rc == 0
+          - "'ro=true' in (snapshot_home_ro.stdout | default('') | replace(' ', ''))"
         fail_msg: >-
           Snapshot {{ resolved_snapshot }} is not a sendable BTRFS snapshot:
-          @ and @home must be subvolumes and @ must have ro=true.
+          @ and @home must both carry ro=true, because `btrfs send` refuses a
+          read-write subvolume (btrfs-send(8): a read-only mount is not enough).
+          Read of {{ snapshot_root }} returned
+          rc={{ snapshot_root_ro.rc | default('n/a') }},
+          stdout='{{ snapshot_root_ro.stdout | default('') | trim }}',
+          stderr='{{ snapshot_root_ro.stderr | default('') | trim }}';
+          read of {{ snapshot_home }} returned
+          rc={{ snapshot_home_ro.rc | default('n/a') }},
+          stdout='{{ snapshot_home_ro.stdout | default('') | trim }}',
+          stderr='{{ snapshot_home_ro.stderr | default('') | trim }}'.
+          Timeshift snapshots are read-write by design. Re-run with
+          -e snapshot_protect_source_read_only=true to let the run set ro=true
+          on both subvolumes, or do it by hand:
+          btrfs property set -t subvol {{ snapshot_root }} ro true
+          btrfs property set -t subvol {{ snapshot_home }} ro true
         quiet: true
+
+    # The snapshot passed the structural gate above; now tell it apart from the
+    # live system the host is running from.
+    - name: Audit the boot state of the host against the snapshot
+      ansible.builtin.include_tasks: audit_boot_state.yml
+
+    - name: Measure how much disk space the snapshot holds
+      ansible.builtin.include_tasks: report_snapshot_size.yml
 
 - name: Canonicalize the VM images directory
   ansible.builtin.command:
@@ -410,6 +424,26 @@
           it before restoring again.
         quiet: true
 
+- name: Report the space held by the snapshot subvolumes
+  when: (snapshot_size_report | default([]) | length) > 0
+  ansible.builtin.debug:
+    msg: >-
+      Snapshot size : {{ item.subvolume }} total={{ item.total }}B
+      exclusive={{ item.exclusive }}B shared={{ item.shared }}B
+      (exclusive is the data unique to this snapshot; total is shared with its
+      parent)
+  loop: "{{ snapshot_size_report | default([]) }}"
+  loop_control:
+    label: "{{ item.subvolume }}"
+
+- name: Report the snapshot subvolumes whose size could not be measured
+  when: (snapshot_size_unavailable | default([]) | length) > 0
+  ansible.builtin.debug:
+    msg: >-
+      Snapshot size : not available for
+      {{ snapshot_size_unavailable | join(', ') }} (the filesystem refused to
+      walk the subvolume)
+
 - name: Report the resolved preflight
   ansible.builtin.debug:
     msg:
@@ -417,6 +451,13 @@
       - "Snapshot      : {{ resolved_snapshot }}"
       - "Root subvolume: {{ snapshot_root }}"
       - "Home subvolume: {{ snapshot_home }}"
-      - "Provenance    : created={{ snapshot_meta_created }} host={{ snapshot_meta_hostname }}"
+      - "Provenance    : created={{ snapshot_meta_created_human }}"
+      - "                host={{ snapshot_meta_hostname | default('unknown', true) }}"
+      - "                uuid={{ snapshot_meta_sys_uuid | default('unknown', true) }}"
+      - "                distro={{ snapshot_meta_sys_distro | default('unknown', true) }}"
       - "VM disk       : {{ vm_disk_real }}"
       - "Free space    : {{ vm_disk_avail_cmd.stdout | trim }} bytes"
+      - >-
+        Top-level     : {{ snapshot_top_mount | default('n/a') }}{{
+                       ' (temporary, released at the end of this run)'
+                       if (snapshot_top_mount_temporary | default(false)) | bool else '' }}

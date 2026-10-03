@@ -83,11 +83,11 @@ flowchart TB
 
     Start(["sudo ansible-playbook<br/>playbooks/restore.yml"]) --> Gate
 
-    subgraph P1["1 · snapshot — preflight somente leitura"]
+    subgraph P1["1 · snapshot — preflight (disco intocado)"]
         direction TB
         Gate{"confirm_restore == true?"}:::gate
         Gate -- "não, padrão seguro" --> Abort(["Aborta: nada é tocado"]):::danger
-        Gate -- "sim" --> A["findmnt descobre o topo BTRFS<br/>e timeshift-btrfs/snapshots<br/>(timeshift_root: auto)"]:::ro
+        Gate -- "sim" --> A["findmnt descobre o topo BTRFS<br/>(ou monta ro em /run)<br/>e timeshift-btrfs/snapshots<br/>(timeshift_root: auto)"]:::ro
         A --> B["resolve o snapshot<br/>@ + @home + info.json"]:::ro
         B --> C["valida subvolumes e proteção ro de @"]:::ro
         C --> D{"vm_disk dentro de vm_images_dir<br/>e espaço livre suficiente?"}:::gate
@@ -273,13 +273,23 @@ reais apenas como fonte, via cópia de staging read-only em `/var/tmp`. Veja
 - `confirm_restore: false` por padrão; `restore`/`plan`/`preflight`/`cleanup`
   exigem `-e confirm_restore=true` explícito, mesmo configurado.
 - `timeshift_root: auto` detecta o subvolume topo do BTRFS e o diretório real
-  de snapshots; dispensa caminhos fixos.
+  de snapshots; dispensa caminhos fixos. Se o topo (subvolid=5) não estiver
+  montado — o caso comum em `subvol=/@` — ele é montado read-only em
+  `/run/arch-timeshift-vm/btrfs-top` e desmontado no fim da execução, sem tocar
+  o `/etc/fstab`. Detalhes em
+  [`docs/USAGE.md`](docs/USAGE.md#resolução-do-topo-btrfs-timeshift_root-auto).
+- O mount temporário é liberado num bloco `always`: um guard que aborta o play
+  não deixa o host segurando o topo dos próprios snapshots.
 - `vm_disk` é canonicalizado e validado contra `vm_images_dir` antes de
   qualquer remoção, com checagem de espaço livre.
 - Redes **todos os hosts do libvirt da VM são isoladas por padrão**
   (`vm_network_mode: isolated`): sem NAT, sem saída externa.
-- Proveniência do snapshot exigida (`info.json` com `created`/`hostname`) e
+- Proveniência do snapshot exigida (`info.json` com `created`/`sys-uuid`) e
   manifest sha256 dos payloads de boot semeados (audit/anti-tamper).
+- Auditoria de boot state: avisa quando o snapshot avaliado é o subvolume de
+  onde o host está rodando (não representa um boot passado); `true` em
+  `snapshot_refuse_live_boot_state` aborta. O `preflight` também reporta o
+  tamanho por subvolume (`total`/`exclusive`/`shared`).
 - Recusa rodar sobre estado sujo de execução anterior (mounts, NBD, qcow2
   `.new`) e bloqueia execuções concorrentes com `flock`.
 - O `/etc/fstab` do host nunca é modificado (mounts efêmeros).
