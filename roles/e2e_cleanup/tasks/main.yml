@@ -55,10 +55,13 @@
   changed_when: false
   failed_when: false
 
-- name: Remove the E2E disk
+- name: Remove the E2E disk and any leftover temporary disk
   ansible.builtin.file:
-    path: "{{ e2e_cleanup_images_dir }}/{{ e2e_cleanup_vm_name }}.qcow2"
+    path: "{{ e2e_cleanup_images_dir }}/{{ e2e_cleanup_vm_name }}.qcow2{{ item }}"
     state: absent
+  loop:
+    - ""
+    - ".new"
 
 - name: Remove the E2E sandbox
   ansible.builtin.file:
