@@ -23,7 +23,8 @@
     set -uo pipefail
     findmnt --raw --noheadings --output TARGET \
       | awk -v root="{{ e2e_cleanup_work_dir }}" \
-        '$0 == root || index($0, root "/") == 1' \
+             -v top="{{ e2e_cleanup_top_mount_point }}" \
+        '$0 == root || index($0, root "/") == 1 || $0 == top' \
       | sort -r \
       | while IFS= read -r mountpoint; do
           [ -n "$mountpoint" ] || continue
@@ -36,11 +37,10 @@
   changed_when: false
   failed_when: false
 
-- name: Release the ephemeral BTRFS top-level mount
-  ansible.builtin.include_tasks:
-    file: "{{ role_path }}/../snapshot/tasks/unmount_btrfs_top.yml"
-  vars:
-    snapshot_top_mount_point: "{{ e2e_cleanup_top_mount_point }}"
+# The ephemeral top-level mount is swept above together with the work_dir
+# mounts: unmount_btrfs_top.yml is owned by the snapshot role and needs its
+# facts (snapshot_top_mount_owned, snapshot_device), which do not exist in this
+# cleanup play, so it cannot be reused here.
 
 - name: Disconnect NBD devices serving the E2E workdir
   ansible.builtin.shell: |

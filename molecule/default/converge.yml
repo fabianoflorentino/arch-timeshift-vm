@@ -280,6 +280,10 @@
             tier1_selector_guard: true
 
     - name: Negative - the auto-mount fallback fails loudly on an unmountable device
+      # Exercises mount(8), which is skipped in check mode, so it cannot take
+      # part in the idempotence pass. Tier 2 covers the same path for real.
+      tags:
+        - molecule-idempotence-notest
       block:
         - name: Seed findmnt output without a top-level mount for the device
           ansible.builtin.set_fact:
@@ -301,10 +305,25 @@
         - name: Record a failed auto-mount guard
           ansible.builtin.set_fact:
             tier1_automount_guard: false
+            tier1_automount_error: ""
       rescue:
         - name: Record a successful auto-mount guard
           ansible.builtin.set_fact:
             tier1_automount_guard: true
+            tier1_automount_error: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Unit - the auto-mount failure names the mount error, not a later guard
+      tags:
+        - molecule-idempotence-notest
+      ansible.builtin.assert:
+        that:
+          - tier1_automount_guard | default(false)
+          - "'Could not mount the BTRFS top-level' in
+            tier1_automount_error | default('')"
+        fail_msg: >-
+          The auto-mount fallback must run mount(8) and fail on its own error.
+          It raised: {{ tier1_automount_error | default('no failure at all') }}
+        success_msg: "The auto-mount fallback attempted the mount and reported it"
 
     - name: Unit - the top-level teardown is a no-op when nothing is mounted
       block:

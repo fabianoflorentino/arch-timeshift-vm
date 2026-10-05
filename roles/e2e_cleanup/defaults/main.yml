@@ -7,5 +7,6 @@ e2e_cleanup_libvirt_uri: qemu:///system
 e2e_cleanup_remove_stage: true
 e2e_cleanup_remove_parent: true
 # Ephemeral BTRFS top-level mount created by the snapshot role when the host has
-# none mounted. Lives outside work_dir, so the mount sweep below misses it.
+# none mounted. Lives outside work_dir, so the cleanup sweep adds this path to
+# the mounts it releases.
 e2e_cleanup_top_mount_point: /run/arch-timeshift-vm/btrfs-top

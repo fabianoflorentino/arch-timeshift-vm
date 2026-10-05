@@ -54,6 +54,11 @@
           when: snapshot_top_mount_owned | default(false) | bool
           ansible.builtin.include_tasks:
             file: "{{ playbook_dir }}/../roles/snapshot/tasks/unmount_btrfs_top.yml"
+          vars:
+            # unmount_btrfs_top.yml takes the mount point as an argument, and the
+            # role default is not visible in the play scope. snapshot_top_mount
+            # is the path the role mounted and published as a fact.
+            snapshot_top_mount_point: "{{ snapshot_top_mount }}"
 
     - name: Report restore pipeline or snapshot mount cleanup failures
       ansible.builtin.assert:

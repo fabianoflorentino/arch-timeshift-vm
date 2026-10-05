@@ -1,4 +1,8 @@
 ---
+# Included by callers, so the role defaults are not in scope. Required variables:
+#   snapshot_top_mount_point - the path to release
+#   snapshot_top_mount_owned - set by mount_btrfs_top.yml when the role mounted it
+#   snapshot_device          - the device the mount must belong to before unmounting
 - name: Check whether this role's temporary BTRFS mount is still mounted
   ansible.builtin.command:
     argv:

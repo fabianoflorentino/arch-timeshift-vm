@@ -35,7 +35,9 @@
       - "{{ snapshot_device }}"
       - "{{ snapshot_top_mount_point }}"
   register: snapshot_top_mount_cmd
-  changed_when: true
+  # A mount that did not happen is not a change. `default(1)` keeps the
+  # expression defined when the task is skipped in check mode.
+  changed_when: (snapshot_top_mount_cmd.rc | default(1)) == 0
   failed_when: false
 
 - name: Fail with the mount error when the BTRFS top-level cannot be mounted

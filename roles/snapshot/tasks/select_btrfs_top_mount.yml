@@ -51,13 +51,16 @@
     snapshot_timeshift_device_uuid: >-
       {{ (snapshot_timeshift_config_parsed | default({})).get('backup_device_uuid', '') | trim }}
 
-- name: Mount the BTRFS top-level when the host does not expose it
+# The guard sits on the include itself, never on a wrapping block: a block-level
+# `when` is inherited by every task the include expands and is re-evaluated per
+# task, so the set_fact in mount_btrfs_top.yml that publishes
+# snapshot_top_mount would flip the first condition to false and silently skip
+# the mount (and every guard after it). On the include it is evaluated once.
+- name: Mount the BTRFS top-level read-only when the host does not expose it
   when:
     - snapshot_top_mount | length == 0
     - timeshift_autodetect_mount_top | default(true) | bool
-  block:
-    - name: Mount the BTRFS top-level read-only
-      ansible.builtin.include_tasks: mount_btrfs_top.yml
+  ansible.builtin.include_tasks: mount_btrfs_top.yml
 
 - name: Fail when the BTRFS top-level subvolume is not mounted
   ansible.builtin.assert:
