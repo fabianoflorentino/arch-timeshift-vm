@@ -22,25 +22,25 @@ timeshift_autodetect_mount_top: true
 # a tmpfs, so the mountpoint never survives a reboot.
 snapshot_top_mount_point: /run/arch-timeshift-vm/btrfs-top
 
-# Mount options for that ephemeral mount. Read-only is enough because the
-# pipeline only reads snapshots from the source (staging copies live under
-# work_dir). Note this is orthogonal to `btrfs send`, which requires the
-# subvolume itself to carry ro=true - see snapshot_protect_source_read_only.
+# Mount options for that ephemeral mount. Read-only is enough: the run only
+# reads the real snapshot to take a copy-on-write copy of it, never to stream or
+# modify it.
 snapshot_top_mount_opts: "subvolid=5,ro"
 
-# Scratch mount point used by snapshot_protect_source_read_only to set ro=true on
-# the snapshot subvolume. Like the top-level mount it lives under /run.
-snapshot_protect_mount_point: /run/arch-timeshift-vm/protect
-snapshot_protect_scratch: "{{ snapshot_protect_mount_point }}/subvolume"
+# Where the run creates its disposable read-only BTRFS copy of the snapshot.
+# `btrfs send` refuses a read-write subvolume and Timeshift snapshots are
+# read-write, so the pipeline never streams the real snapshot: it takes a
+# copy-on-write snapshot of it (`btrfs subvolume snapshot -r`) and streams that.
+# A COW copy shares every extent with its source, so it costs almost no space,
+# but `btrfs subvolume snapshot` only works within one filesystem: this path
+# MUST live on the same BTRFS filesystem as the snapshots. A path on another
+# filesystem (an ext4 disk, say) is rejected with a clear error.
+snapshot_stage_root: /var/tmp/arch-timeshift-vm-stage
 
-# `btrfs send` refuses a read-write subvolume, and a read-only mount of it is
-# explicitly not enough (btrfs-send(8)). Timeshift creates read-write snapshots,
-# so this run has to set ro=true on the snapshot @ and @home before streaming
-# them. That writes to the user's own BTRFS, hence opt-in: with the default the
-# preflight fails and prints the exact commands instead of mutating a snapshot
-# the user owns. Timeshift keeps listing, restoring and deleting the snapshot
-# after the flag is set.
-snapshot_protect_source_read_only: false
+# Free space the staging filesystem must keep. The COW copy itself needs only
+# metadata, so this is a safety margin against a filesystem filling up while the
+# pipeline runs.
+snapshot_stage_min_free_bytes: 1G
 
 # Read /etc/timeshift/timeshift.json to report the device Timeshift backs up.
 # Only used for diagnostics; a missing or unreadable file is not fatal.

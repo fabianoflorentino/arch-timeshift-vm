@@ -1,0 +1,170 @@
+---
+# Creates the disposable read-only copy of the snapshot the pipeline streams
+# from.
+#
+# `btrfs send` refuses a read-write subvolume, and Timeshift snapshots are
+# read-write. Instead of flipping ro=true on a snapshot the user owns, this takes
+# a copy-on-write subvolume snapshot of @ and @home and marks the copies
+# read-only: the real snapshot is only ever read. A COW snapshot shares every
+# extent with its source, so the copy costs almost no space.
+#
+# `btrfs subvolume snapshot` works only within one filesystem, so the staging
+# root must live on the same BTRFS filesystem as the snapshots. This is checked
+# before anything is written, and a non-BTRFS path (an ext4 disk, for example)
+# is refused with a clear message.
+
+- name: Validate the staging root
+  ansible.builtin.assert:
+    that:
+      - snapshot_stage_root is defined
+      - snapshot_stage_root | length > 0
+      - snapshot_stage_root is match('^/.+')
+    fail_msg: >-
+      snapshot_stage_root must be a non-empty absolute path on the same BTRFS
+      filesystem as the snapshots.
+    quiet: true
+
+- name: Create the staging root directory
+  ansible.builtin.file:
+    path: "{{ snapshot_stage_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Read the filesystem that holds the snapshot source
+  ansible.builtin.command:
+    cmd: "findmnt --noheadings --raw --output SOURCE,FSTYPE --target {{ snapshot_root_dir }}"
+  register: snapshot_stage_source_fs
+  changed_when: false
+
+- name: Read the filesystem that holds the staging root
+  ansible.builtin.command:
+    cmd: "findmnt --noheadings --raw --output SOURCE,FSTYPE --target {{ snapshot_stage_root }}"
+  register: snapshot_stage_root_fs
+  changed_when: false
+
+# findmnt renders a Btrfs mount of a non-top-level subvolume as
+# /dev/xxx[/subvol]; only the device identifies the filesystem, so the suffix is
+# stripped before the comparison.
+- name: Resolve the source and staging filesystem identity
+  ansible.builtin.set_fact:
+    snapshot_stage_source_device: >-
+      {{ snapshot_stage_source_fs.stdout | trim | split | first
+         | regex_replace('\[[^]]*\]$', '') }}
+    snapshot_stage_source_fstype: "{{ snapshot_stage_source_fs.stdout | trim | split | last }}"
+    snapshot_stage_root_device: >-
+      {{ snapshot_stage_root_fs.stdout | trim | split | first
+         | regex_replace('\[[^]]*\]$', '') }}
+    snapshot_stage_root_fstype: "{{ snapshot_stage_root_fs.stdout | trim | split | last }}"
+
+- name: Assert the copy will be on the same BTRFS filesystem as the snapshot
+  ansible.builtin.assert:
+    that:
+      - snapshot_stage_source_fstype == 'btrfs'
+      - snapshot_stage_root_fstype == 'btrfs'
+      - snapshot_stage_root_device == snapshot_stage_source_device
+    fail_msg: >-
+      snapshot_stage_root '{{ snapshot_stage_root }}' is on
+      {{ snapshot_stage_root_fstype }} device {{ snapshot_stage_root_device }},
+      but the snapshots are on {{ snapshot_stage_source_fstype }} device
+      {{ snapshot_stage_source_device }}. The pipeline reads from a copy-on-write
+      copy of the snapshot, and `btrfs subvolume snapshot` only works within one
+      BTRFS filesystem: point snapshot_stage_root at a writable directory on that
+      filesystem. A non-BTRFS disk cannot hold it.
+    quiet: true
+
+- name: Query free space on the staging filesystem
+  ansible.builtin.command:
+    cmd: "findmnt --noheadings --bytes --output AVAIL --target {{ snapshot_stage_root }}"
+  register: snapshot_stage_avail
+  changed_when: false
+
+- name: Compute the required free space for the staging copy
+  ansible.builtin.set_fact:
+    snapshot_stage_required_bytes: "{{ snapshot_stage_min_free_bytes | human_to_bytes }}"
+
+- name: Assert there is enough free space for the staging copy
+  ansible.builtin.assert:
+    that:
+      - snapshot_stage_avail.stdout | trim | length > 0
+      - (snapshot_stage_avail.stdout | trim | int) >= (snapshot_stage_required_bytes | int)
+    fail_msg: >-
+      Not enough free space on the staging filesystem ({{ snapshot_stage_root }}):
+      need {{ snapshot_stage_required_bytes }} bytes, have
+      {{ snapshot_stage_avail.stdout | trim or 'unknown' }}. A copy-on-write copy
+      shares its data with the source, so this is the margin required for the
+      filesystem to keep working, not the size of the snapshot.
+    quiet: true
+
+# Published before anything is created so the caller's cleanup can release a
+# partial copy even if this file fails half-way.
+- name: Publish the staging paths
+  ansible.builtin.set_fact:
+    snapshot_source_dir: "{{ snapshot_dir }}"
+    snapshot_source_root: "{{ snapshot_root }}"
+    snapshot_source_home: "{{ snapshot_home }}"
+    snapshot_stage_dir: "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots/{{ resolved_snapshot }}"
+
+- name: Create the staging directory tree
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ snapshot_stage_root }}/timeshift-btrfs"
+    - "{{ snapshot_stage_root }}/timeshift-btrfs/snapshots"
+    - "{{ snapshot_stage_dir }}"
+
+- name: Take the read-only copy of the snapshot root subvolume
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - subvolume
+      - snapshot
+      - -r
+      - "{{ snapshot_source_root }}"
+      - "{{ snapshot_stage_dir }}/@"
+  changed_when: true
+
+- name: Take the read-only copy of the snapshot home subvolume
+  ansible.builtin.command:
+    argv:
+      - btrfs
+      - subvolume
+      - snapshot
+      - -r
+      - "{{ snapshot_source_home }}"
+      - "{{ snapshot_stage_dir }}/@home"
+  changed_when: true
+
+- name: Copy the snapshot metadata into the staging copy
+  ansible.builtin.copy:
+    src: "{{ snapshot_info_file }}"
+    dest: "{{ snapshot_stage_dir }}/info.json"
+    remote_src: true
+    mode: "0644"
+
+- name: Read the read-only property of the staged root subvolume
+  ansible.builtin.command:
+    cmd: "btrfs property get -t subvol {{ snapshot_stage_dir }}/@ ro"
+  register: snapshot_stage_root_ro
+  changed_when: false
+
+- name: Assert the staged copy is a read-only btrfs source
+  ansible.builtin.assert:
+    that:
+      - "'ro=true' in (snapshot_stage_root_ro.stdout | default('') | replace(' ', ''))"
+    fail_msg: >-
+      The staged copy {{ snapshot_stage_dir }}/@ is not read-only, so btrfs send
+      would refuse it.
+    quiet: true
+
+# Point the rest of the pipeline at the copy. snapshot_dir/root/home/info_file
+# are the variables every downstream role reads; the real paths stay available
+# as snapshot_source_*.
+- name: Point the pipeline at the staged copy
+  ansible.builtin.set_fact:
+    snapshot_dir: "{{ snapshot_stage_dir }}"
+    snapshot_root: "{{ snapshot_stage_dir }}/@"
+    snapshot_home: "{{ snapshot_stage_dir }}/@home"
+    snapshot_info_file: "{{ snapshot_stage_dir }}/info.json"
+    snapshot_staged: true

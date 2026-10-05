@@ -1,0 +1,63 @@
+---
+# Removes the disposable copy created by stage_snapshot.yml.
+#
+# Owned by the caller (the play), not by the snapshot role: the copy has to
+# outlive the role until the restore has streamed it. Idempotent, so a run that
+# never staged anything, or a second call after a role-level cleanup, is a no-op.
+
+- name: Remove the disposable snapshot copy
+  when:
+    - snapshot_stage_dir is defined
+    - snapshot_stage_dir | length > 0
+  block:
+    - name: Check whether the staged copy still exists
+      ansible.builtin.stat:
+        path: "{{ snapshot_stage_dir }}"
+      register: snapshot_stage_present
+
+    - name: Delete the staged root subvolume
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - subvolume
+          - delete
+          - "{{ snapshot_stage_dir }}/@"
+      register: snapshot_stage_root_delete
+      changed_when: snapshot_stage_root_delete.rc == 0
+      failed_when: false
+      when: snapshot_stage_present.stat.exists | default(false) | bool
+
+    - name: Delete the staged home subvolume
+      ansible.builtin.command:
+        argv:
+          - btrfs
+          - subvolume
+          - delete
+          - "{{ snapshot_stage_dir }}/@home"
+      register: snapshot_stage_home_delete
+      changed_when: snapshot_stage_home_delete.rc == 0
+      failed_when: false
+      when: snapshot_stage_present.stat.exists | default(false) | bool
+
+    - name: Remove the staged metadata and directory scaffold
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ snapshot_stage_dir }}"
+        - "{{ snapshot_stage_root }}/timeshift-btrfs"
+      when: snapshot_stage_present.stat.exists | default(false) | bool
+
+    - name: Record a staging cleanup failure
+      ansible.builtin.set_fact:
+        snapshot_stage_cleanup_error: >-
+          Could not remove the disposable snapshot copy under
+          {{ snapshot_stage_dir }}. btrfs subvolume delete @:
+          {{ snapshot_stage_root_delete.stderr | default('not attempted') | trim }}.
+          btrfs subvolume delete @home:
+          {{ snapshot_stage_home_delete.stderr | default('not attempted') | trim }}.
+      when:
+        - snapshot_stage_present.stat.exists | default(false) | bool
+        - >-
+          (snapshot_stage_root_delete.rc | default(0) != 0) or
+          (snapshot_stage_home_delete.rc | default(0) != 0)

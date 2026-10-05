@@ -60,14 +60,23 @@
             # is the path the role mounted and published as a fact.
             snapshot_top_mount_point: "{{ snapshot_top_mount }}"
 
+        - name: Remove the disposable snapshot copy
+          when:
+            - snapshot_stage_dir is defined
+            - snapshot_stage_dir | length > 0
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../roles/snapshot/tasks/remove_staged_snapshot.yml"
+
     - name: Report restore pipeline or snapshot mount cleanup failures
       ansible.builtin.assert:
         that:
           - restore_pipeline_error | length == 0
           - snapshot_cleanup_error | default('') | length == 0
+          - snapshot_stage_cleanup_error | default('') | length == 0
         fail_msg: >-
           {{ restore_pipeline_error }}
           {{ snapshot_cleanup_error | default('') }}
+          {{ snapshot_stage_cleanup_error | default('') }}
         quiet: true
 
   post_tasks:

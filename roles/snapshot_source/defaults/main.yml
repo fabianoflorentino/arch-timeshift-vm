@@ -7,8 +7,11 @@ snapshot_source_create_comment: "arch-timeshift-vm-e2e"
 snapshot_source_create_tags: O
 snapshot_source_require_boot_artifacts: true
 snapshot_source_validate_btrfs: true
-snapshot_source_require_readonly_source: true
-snapshot_source_require_readonly_subvolume: true
+# The pipeline streams from a copy-on-write copy, so the real Timeshift snapshot
+# no longer has to be read-only (Timeshift creates read-write snapshots). These
+# stay available for callers that want to assert strict read-only provenance.
+snapshot_source_require_readonly_source: false
+snapshot_source_require_readonly_subvolume: false
 snapshot_source_required_commands:
   - find
   - realpath

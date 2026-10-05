@@ -30,3 +30,10 @@
             # role default is not visible in the play scope. snapshot_top_mount
             # is the path the role mounted and published as a fact.
             snapshot_top_mount_point: "{{ snapshot_top_mount }}"
+
+        - name: Remove the disposable snapshot copy
+          when:
+            - snapshot_stage_dir is defined
+            - snapshot_stage_dir | length > 0
+          ansible.builtin.include_tasks:
+            file: "{{ playbook_dir }}/../roles/snapshot/tasks/remove_staged_snapshot.yml"

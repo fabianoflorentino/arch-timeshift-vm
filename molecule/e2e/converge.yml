@@ -29,10 +29,8 @@
     libvirt_start: true
     libvirt_attach_iso: false
     libvirt_graphics: none
-    snapshot_stage_enabled: true
-    snapshot_stage_source_root: "{{ e2e_snapshot_dir }}"
     snapshot_stage_root: "{{ e2e_stage_root }}"
-    snapshot_stage_name: "{{ e2e_snapshot_name }}"
+    snapshot_source_require_readonly_source: false
     snapshot_source_require_readonly_subvolume: false
     boot_guest_evidence_enabled: true
 
@@ -59,7 +57,6 @@
   roles:
     - e2e_preflight
     - snapshot_source
-    - snapshot_stage
     - snapshot
     - disk
     - restore

@@ -1,9 +1,10 @@
 ---
-# Resolve and validate the snapshot and the destructive VM disk path. The role
-# reads state only, with one exception: when the host has no BTRFS top-level
-# mount it mounts one read-only under /run for the duration of the run (see
-# timeshift_autodetect_mount_top). Nothing else is mutated, and the caller
-# releases that mount in its always/cleanup step.
+# Resolve and validate the snapshot and the destructive VM disk path. The real
+# snapshot is read-only throughout: the run takes a copy-on-write read-only copy
+# of it and streams that instead (see stage_snapshot.yml). The only writes are
+# that copy and, when the host has no BTRFS top-level mount, an ephemeral
+# read-only mount under /run (see timeshift_autodetect_mount_top). The caller
+# releases both in its always/cleanup step.
 #
 # Kept in its own task file so the preflight can be split out of the role
 # entrypoint, which wraps it in block/rescue/always to guarantee the temporary
@@ -256,63 +257,22 @@
           (rc={{ snapshot_home_check.rc | default('n/a') }}) is not one.
         quiet: true
 
-    # Opt-in: btrfs send refuses a read-write subvolume, and Timeshift snapshots
-    # are read-write. See protect_snapshot_read_only.yml for why the flag has to
-    # live on the subvolume and not on the mount.
-    - name: Protect the snapshot subvolumes for btrfs send
-      when: snapshot_protect_source_read_only | bool
-      ansible.builtin.include_tasks: protect_snapshot_read_only.yml
-
-    - name: Read the read-only property of the snapshot @ subvolume
-      ansible.builtin.command:
-        cmd: "btrfs property get -t subvol {{ snapshot_root }} ro"
-      register: snapshot_root_ro
-      changed_when: false
-      failed_when: false
-
-    - name: Read the read-only property of the snapshot @home subvolume
-      ansible.builtin.command:
-        cmd: "btrfs property get -t subvol {{ snapshot_home }} ro"
-      register: snapshot_home_ro
-      changed_when: false
-      failed_when: false
-
-    - name: Assert the snapshot is a sendable btrfs source
-      ansible.builtin.assert:
-        that:
-          # `btrfs property get -t subvol <path> ro` prints "ro=true", but the
-          # probes above swallow their rc, so a failed read would otherwise be
-          # reported as "not read-only" instead of "could not be read".
-          - snapshot_root_ro.rc == 0
-          - "'ro=true' in (snapshot_root_ro.stdout | default('') | replace(' ', ''))"
-          - snapshot_home_ro.rc == 0
-          - "'ro=true' in (snapshot_home_ro.stdout | default('') | replace(' ', ''))"
-        fail_msg: >-
-          Snapshot {{ resolved_snapshot }} is not a sendable BTRFS snapshot:
-          @ and @home must both carry ro=true, because `btrfs send` refuses a
-          read-write subvolume (btrfs-send(8): a read-only mount is not enough).
-          Read of {{ snapshot_root }} returned
-          rc={{ snapshot_root_ro.rc | default('n/a') }},
-          stdout='{{ snapshot_root_ro.stdout | default('') | trim }}',
-          stderr='{{ snapshot_root_ro.stderr | default('') | trim }}';
-          read of {{ snapshot_home }} returned
-          rc={{ snapshot_home_ro.rc | default('n/a') }},
-          stdout='{{ snapshot_home_ro.stdout | default('') | trim }}',
-          stderr='{{ snapshot_home_ro.stderr | default('') | trim }}'.
-          Timeshift snapshots are read-write by design. Re-run with
-          -e snapshot_protect_source_read_only=true to let the run set ro=true
-          on both subvolumes, or do it by hand:
-          btrfs property set -t subvol {{ snapshot_root }} ro true
-          btrfs property set -t subvol {{ snapshot_home }} ro true
-        quiet: true
-
     # The snapshot passed the structural gate above; now tell it apart from the
-    # live system the host is running from.
+    # live system the host is running from. This reads the real subvolume, so it
+    # runs before the copy is taken: the copy gets a new subvolume ID and would
+    # defeat the comparison.
     - name: Audit the boot state of the host against the snapshot
       ansible.builtin.include_tasks: audit_boot_state.yml
 
     - name: Measure how much disk space the snapshot holds
       ansible.builtin.include_tasks: report_snapshot_size.yml
+
+    # Never stream the real snapshot. btrfs send refuses a read-write subvolume
+    # and Timeshift snapshots are read-write, so the run takes a copy-on-write
+    # read-only copy and points the pipeline at that instead. The real snapshot
+    # is only ever read; nothing under it is modified or mounted read-write.
+    - name: Take the disposable read-only copy the pipeline streams from
+      ansible.builtin.include_tasks: stage_snapshot.yml
 
 - name: Canonicalize the VM images directory
   ansible.builtin.command:
@@ -449,8 +409,9 @@
     msg:
       - "Snapshot root : {{ snapshot_root_dir }}"
       - "Snapshot      : {{ resolved_snapshot }}"
-      - "Root subvolume: {{ snapshot_root }}"
-      - "Home subvolume: {{ snapshot_home }}"
+      - "Real @        : {{ snapshot_source_root | default('n/a') }} (never modified)"
+      - "Streams from  : {{ snapshot_root }}{{
+                       ' (copy-on-write snapshot)' if snapshot_staged | default(false) else ' (real snapshot!)' }}"
       - "Provenance    : created={{ snapshot_meta_created_human }}"
       - "                host={{ snapshot_meta_hostname | default('unknown', true) }}"
       - "                uuid={{ snapshot_meta_sys_uuid | default('unknown', true) }}"

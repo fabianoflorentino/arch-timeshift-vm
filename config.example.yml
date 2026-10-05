@@ -23,6 +23,15 @@ timeshift_root: auto
 work_dir: /data/timeshift-vm-work
 nvram_dir: /var/lib/libvirt/qemu/nvram
 
+# Directory where the run creates its disposable read-only COW copy of the
+# snapshot before streaming it. It MUST be on the same BTRFS filesystem as the
+# snapshots (a copy-on-write copy costs almost no space); a non-BTRFS path is
+# refused. Defaults to /var/tmp, which is on the root BTRFS for the common
+# subvol=/@ layout.
+snapshot_stage_root: /var/tmp/arch-timeshift-vm-stage
+# Safety margin the staging filesystem must keep free while the run proceeds.
+snapshot_stage_min_free_bytes: 1G
+
 # "latest" or an exact Timeshift snapshot directory name.
 snapshot: latest
 

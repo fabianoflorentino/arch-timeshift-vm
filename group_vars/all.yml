@@ -18,6 +18,15 @@ timeshift_root: auto
 work_dir: /data/timeshift-vm-work
 nvram_dir: /var/lib/libvirt/qemu/nvram
 
+# The pipeline never streams the real snapshot: btrfs send refuses a read-write
+# subvolume and Timeshift snapshots are read-write, so the run takes a
+# copy-on-write read-only copy and streams that. The copy must be created on the
+# SAME BTRFS filesystem as the snapshots and costs almost no space; a non-BTRFS
+# path (an ext4 disk, say) is refused with a clear error.
+snapshot_stage_root: /var/tmp/arch-timeshift-vm-stage
+# Safety margin the staging filesystem must keep free while the run proceeds.
+snapshot_stage_min_free_bytes: 1G
+
 # Set to "latest" or an exact Timeshift snapshot directory name.
 snapshot: latest
 
