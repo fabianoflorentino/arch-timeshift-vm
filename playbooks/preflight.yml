@@ -14,6 +14,14 @@
   become: true
   gather_facts: true
 
+  # Ansible auto-loads group_vars only next to the inventory or next to the
+  # playbook. This configuration lives at the repository root, so a playbook
+  # under playbooks/ would run unconfigured. Load it explicitly, like
+  # restore.yml: the always cleanup below also needs snapshot_stage_root, which
+  # only exists as a role default otherwise.
+  vars_files:
+    - ../group_vars/all.yml
+
   tasks:
     - name: Validate the snapshot and the destructive paths
       block:

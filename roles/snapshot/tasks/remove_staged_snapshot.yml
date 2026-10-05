@@ -45,7 +45,12 @@
         state: absent
       loop:
         - "{{ snapshot_stage_dir }}"
-        - "{{ snapshot_stage_root }}/timeshift-btrfs"
+        # snapshot_stage_root is a role default; the caller's play scope may not
+        # see it. Derive it from the staged path when it is not set.
+        - >-
+          {{ (snapshot_stage_root
+              | default(snapshot_stage_dir | dirname | dirname | dirname))
+             }}/timeshift-btrfs
       when: snapshot_stage_present.stat.exists | default(false) | bool
 
     - name: Record a staging cleanup failure

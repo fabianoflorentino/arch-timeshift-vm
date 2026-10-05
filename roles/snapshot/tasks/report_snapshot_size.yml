@@ -39,9 +39,15 @@
            'total': (size_row | first | default('0', true)) | int,
            'exclusive': (size_row[1:2] | first | default('0', true)) | int,
            'shared': (size_row[2:3] | first | default('0', true)) | int,
-         }] }}
+          }] }}
   vars:
-    size_row: "{{ item.stdout | default('') | trim | split() }}"
+    # `btrfs filesystem du` prints a header row ("Total Exclusive Set shared
+    # Filename") before the data row, so reading stdout head-on parsed the
+    # column names and reported 0 bytes. Keep only the line that starts with a
+    # number; join(' ') keeps the expression safe when there is no such line.
+    size_row: >-
+      {{ (item.stdout_lines | default([])
+          | select('match', '^[0-9]') | list | join(' ')) | split() }}
   loop: "{{ snapshot_du.results | default([]) }}"
   when:
     - item.rc | int == 0
@@ -54,4 +60,8 @@
   loop: "{{ snapshot_du.results | default([]) }}"
   when: (item.rc | int != 0) or (size_row | length < 4)
   vars:
-    size_row: "{{ item.stdout | default('') | trim | split() }}"
+    # Same numeric-line parsing as above, so a successful but unparsable result
+    # is reported as unavailable instead of being dropped.
+    size_row: >-
+      {{ (item.stdout_lines | default([])
+          | select('match', '^[0-9]') | list | join(' ')) | split() }}
