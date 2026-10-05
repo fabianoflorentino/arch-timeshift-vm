@@ -63,39 +63,41 @@ Top-level     : /run/arch-timeshift-vm/btrfs-top (temporary, released at the end
 | `snapshot_top_mount_opts` | `subvolid=5,ro` | Opções do mount temporário |
 | `timeshift_device` | `""` | Sobrescreve o dispositivo detectado a partir de `/` |
 | `snapshot_refuse_live_boot_state` | `false` | `true` aborta quando o host está rodando a partir do snapshot avaliado |
-| `snapshot_protect_source_read_only` | `false` | `true` aplica `ro=true` no `@`/`@home` do snapshot, exigido pelo `btrfs send` |
-| `snapshot_protect_mount_point` | `/run/arch-timeshift-vm/protect` | Scratch do ajuste `ro=true` |
+| `snapshot_stage_root` | `/var/tmp/arch-timeshift-vm-stage` | Onde a cópia read-only do snapshot é criada. Precisa estar no mesmo filesystem BTRFS dos snapshots |
+| `snapshot_stage_min_free_bytes` | `1G` | Margem mínima de espaço livre exigida no filesystem de staging |
 
-### O snapshot precisa de `ro=true` para ser enviado
+### A cópia descartável do snapshot
 
-O `btrfs send` exige que os subvolumes do stream carreguem o flag `ro`, e um
-mount read-only **não** basta (btrfs-send(8)). O Timeshift cria snapshots
-read-write — ele restaura copiando arquivos, nunca envia stream — então um
-snapshot recém-criado é recusado na hora:
+O `btrfs send` exige que os subvolumes do stream carreguem o flag `ro`, e o
+Timeshift cria snapshots read-write. O pipeline **nunca** ajusta o snapshot real
+nem envia a partir dele: ele tira uma cópia read-only por copy-on-write
+(`btrfs subvolume snapshot -r`) e envia a cópia. Como a cópia compartilha todos os
+extents com a origem, ela custa quase nada de espaço.
+
+Duas exigências vêm daí:
+
+1. a cópia precisa ficar no **mesmo filesystem BTRFS** dos snapshots
+   (`btrfs subvolume snapshot` não cruza filesystems). O padrão
+   `/var/tmp/arch-timeshift-vm-stage` está no BTRFS raiz no layout comum
+   (`subvol=/@`);
+2. o filesystem de staging precisa manter espaço livre
+   (`snapshot_stage_min_free_bytes`, padrão `1G`) — margem para metadados, não o
+   tamanho do snapshot.
+
+Se o padrão não servir, aponte `snapshot_stage_root` para um diretório gravável
+no mesmo BTRFS. Um caminho em outro filesystem (um `/data` ext4, por exemplo) é
+recusado com uma mensagem explícita:
 
 ```bash
-arch-timeshift-vm preflight -e confirm_restore=true
-# Snapshot 2026-10-01_15-00-01 is not a sendable BTRFS snapshot: @ and @home
-# must both carry ro=true ... re-run with
-# -e snapshot_protect_source_read_only=true
+arch-timeshift-vm preflight -e confirm_restore=true \
+  -e snapshot_stage_root=/mnt/btrfs-top/.stage
+# snapshot_stage_root '...' is on ext4 device ..., but the snapshots are on
+# btrfs device ... A non-BTRFS disk cannot hold it.
 ```
 
-Duas saídas:
-
-```bash
-# 1. deixa a execução aplicar o flag (opt-in, pois escreve no BTRFS do host)
-arch-timeshift-vm run -e confirm_restore=true -e snapshot_protect_source_read_only=true
-
-# 2. aplica uma vez, à mão
-sudo btrfs property set -t subvol \
-  /mnt/btrfs-top/timeshift-btrfs/snapshots/2026-10-01_15-00-01/@ ro true
-sudo btrfs property set -t subvol \
-  /mnt/btrfs-top/timeshift-btrfs/snapshots/2026-10-01_15-00-01/@home ro true
-```
-
-Depois do ajuste, o Timeshift continua listando, restaurando e apagando o snapshot
-normalmente: o flag `ro` é metadado do subvolume, e a restauração do VM já devolve
-`ro=false` no `@`/`@home` recebidos.
+O snapshot real permanece listável, restaurável e apagável pelo Timeshift
+exatamente como era: a cópia vive em `snapshot_stage_root` e é removida ao fim da
+execução (inclusive quando um guard aborta o run).
 
 Com `timeshift_autodetect_mount_top=false` e nenhum topo montado, o preflight
 falha com a linha de `fstab` pronta para colar. Montar o topo permanentemente é
@@ -215,8 +217,7 @@ cópia read-only do snapshot real e limpa tudo ao final:
 flowchart TD
     E["E2E_TIMESHIFT_ROOT=<dir> make e2e"] --> PF["e2e_preflight<br/>KVM · OVMF · ferramentas · rede · espaço"]
     PF --> SS["snapshot_source<br/>resolve e valida o snapshot real"]
-    SS --> SG["snapshot_stage<br/>cópia read-only descartável"]
-    SG --> PIPE["snapshot → disk → restore → boot → libvirt<br/>(pipeline completo)"]
+    SS --> PIPE["snapshot (cópia read-only)<br/>→ disk → restore → boot → libvirt"]
     PIPE --> VF["verify<br/>domstate · disco anexado · guest agent · marcador"]
     VF --> CL["e2e_cleanup<br/>domínio · NVRAM · XML · mounts · NBD · staging"]
     CL --> Z(["host sem resíduo"])
@@ -227,8 +228,10 @@ O que acontece:
 1. `e2e_preflight` valida KVM, ferramentas, OVMF, rede libvirt
    (`qemu:///system`) e espaço — sem alterar o host.
 2. `snapshot_source` resolve e valida o snapshot (`latest` ou nome exato).
-3. `snapshot_stage` cria uma cópia BTRFS read-only descartável em
-   `/var/tmp/arch-timeshift-vm-stage` (os snapshots reais nunca são mutados).
+3. O role `snapshot` tira uma cópia BTRFS read-only descartável
+   (`btrfs subvolume snapshot -r`) em `snapshot_stage_root`
+   (`/var/tmp/arch-timeshift-vm-stage` por padrão) e envia a cópia — os snapshots
+   reais nunca são mutados.
 4. O pipeline (`snapshot`, `disk`, `restore`, `boot`, `libvirt`) produz a VM
    em `/var/tmp/arch-timeshift-vm-e2e` e a inicia com UEFI/KVM.
 5. `verify` aguarda `virsh domstate` chegar a `running`, confere o disco

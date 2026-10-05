@@ -18,14 +18,16 @@ melhorias (ex.: Fase 6.1, Fase 6.2).
   `/etc/fstab` do host continua intocado. Desligável com
   `timeshift_autodetect_mount_top=false`; ponto e opções configuráveis via
   `snapshot_top_mount_point`/`snapshot_top_mount_opts`.
-- `ro=true` no `@`/`@home` do snapshot deixou de ser pré-requisito manual: o
-  `btrfs send` recusa subvolume read-write e um mount read-only não basta
-  (btrfs-send(8)), enquanto o Timeshift cria snapshots read-write. Com
-  `-e snapshot_protect_source_read_only=true` a execução monta cada subvolume num
-  scratch em `/run`, aplica `ro=true` e desmonta — sem remontar o topo
-  compartilhado, que expõe o `@`/`@home` vivos do host. Continua opt-in por
-  escrever no BTRFS do usuário; sem a flag o preflight falha mostrando os
-  comandos exatos. O `restore` já devolve `ro=false` no que recebe.
+- O pipeline nunca usa o snapshot real como fonte do `btrfs send`: o role
+  `snapshot` tira uma cópia read-only por copy-on-write
+  (`btrfs subvolume snapshot -r`) em `snapshot_stage_root` e envia a cópia. O
+  `@`/`@home` do Timeshift continuam read-write e intocados — nenhuma mutação no
+  snapshot do usuário. A cópia precisa estar no mesmo filesystem BTRFS dos
+  snapshots e o filesystem de staging precisa de espaço livre
+  (`snapshot_stage_min_free_bytes`, padrão `1G`); os dois são validados antes de
+  qualquer escrita. O antigo `snapshot_protect_source_read_only`, que gravava
+  `ro=true` no snapshot real, foi removido. A cópia é removida no `always` de
+  `preflight.yml`/`restore.yml` (e pelo role no E2E).
 - O flag `snapshot_top_mount_temporary` passa a ser publicado antes de o mount
   ser tentado: um mount que falha pela metade não pode escapar do `always` do
   play e deixar o topo montado.

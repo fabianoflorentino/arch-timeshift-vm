@@ -85,23 +85,27 @@ Ou use `latest`:
 E2E_SNAPSHOT=latest make e2e
 ```
 
-### "is not a sendable BTRFS snapshot: @ and @home must be subvolumes and @ must have ro=true"
+### "Assert the copy will be on the same BTRFS filesystem as the snapshot"
 
-O `@` do snapshot não é um subvolume read-only. Um mount `ro` não é suficiente
-para `btrfs send`. Verifique:
+O `snapshot_stage_root` aponta para um filesystem diferente do que guarda os
+snapshots. A cópia read-only é um `btrfs subvolume snapshot -r`, que só existe
+dentro do mesmo filesystem BTRFS. Aponte para um diretório gravável no BTRFS dos
+snapshots:
 
 ```bash
-btrfs property get -t subvol /mnt/btrfs-top/timeshift-btrfs/snapshots/2026-09-20_14-00-00/@
-# esperado: ro=true
+findmnt -no SOURCE,FSTYPE,TARGET --target /
+findmnt -no SOURCE,FSTYPE,TARGET --target /var/tmp
 ```
 
-Se `ro=false`, selecione outro snapshot ou crie um novo com o Timeshift
-(`O` snapshot). Para um fixture de teste, é possível relaxar a validação com
-`snapshot_source_validate_btrfs=false`.
+Um disco ext4 separado (por exemplo `/data` ext4) não pode receber a cópia, por
+mais espaço que tenha: `btrfs subvolume snapshot` não cruza filesystems.
 
-A mensagem também traz `rc=`, `stdout=` e `stderr=` da leitura: se `rc != 0`, o
-problema é o comando (caminho errado, `btrfs-progs` antigo, snapshot não
-acessível pelo mount do topo) e não a proteção do subvolume.
+### "Not enough free space on the staging filesystem"
+
+O filesystem de `snapshot_stage_root` está abaixo de
+`snapshot_stage_min_free_bytes` (padrão `1G`). A cópia compartilha todos os
+extents com a origem, então a exigência é só uma margem para metadados: libere
+espaço ou aponte `snapshot_stage_root` para outro diretório no mesmo BTRFS.
 
 ### "the host boot state overlaps snapshot ..."
 

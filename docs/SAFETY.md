@@ -49,6 +49,7 @@ confirmações exigidas e os limites de mutação de cada comando.
 | Recriar `vm_disk` a partir de um snapshot | `playbooks/restore.yml` | `confirm_restore=true` | somente o disco sob `vm_images_dir`; domínio `vm_name` |
 | Remover o disco da VM | `restore` / teardown | via `confirm_restore` | arquivo `vm_disk` canonicalizado, sob `vm_images_dir` |
 | Criar um snapshot Timeshift novo | `playbooks/prepare-e2e.yml` | `snapshot_source_create=true` **e** `snapshot_source_create_confirm=true` | instala o snapshot usando o `timeshift`; nunca apaga snapshots existentes |
+| Criar a cópia read-only do snapshot | role `snapshot` (preflight/restore/E2E) | implícito em `confirm_restore=true` | `btrfs subvolume snapshot -r` em `snapshot_stage_root` (mesmo BTRFS); o snapshot real só é lido; a cópia é removida no `always` |
 | Preparar a rede libvirt padrão | `prepare-e2e.yml` | `e2e_preflight_prepare_network=true` | define/habilita/inicia a rede em `/etc/libvirt/qemu/networks/<name>.xml` |
 | Remover artefatos E2E | `make clean-e2e` / `e2e_cleanup` | opcional (comando explícito) | somente `/var/tmp/arch-timeshift-vm-e2e`, `/var/tmp/arch-timeshift-vm-stage` e o domínio `e2e_vm_name` |
 | Remover VM restaurada e estado | `arch-timeshift-vm cleanup` / `playbooks/cleanup.yml` | `confirm_restore=true` | domínio `vm_name`, NVRAM/XML sob `work_dir`, disco `vm_disk` e mounts/NBD órfãos sob `work_dir` |
@@ -57,10 +58,11 @@ confirmações exigidas e os limites de mutação de cada comando.
 
 - O snapshot usado é resolvido de forma determinística (`latest` ou nome
   exato) e registrado em `e2e-vars.yml`; não há seleção heurística silenciosa.
-- A fonte real é validada como subvolume BTRFS `@` com `ro=true` antes de
-  qualquer operação; um mount `ro` sozinho não basta para `btrfs send`.
-- O E2E nunca grava na árvore de snapshots: `snapshot_stage` cria cópias
-  read-only em `/var/tmp`.
+- O `@`/`@home` reais nunca são ajustados: o role `snapshot` tira uma cópia
+  copy-on-write read-only (`btrfs subvolume snapshot -r`) e o `restore` envia a
+  cópia. Um snapshot read-write do Timeshift funciona sem nenhuma mutação.
+- Nenhum fluxo grava na árvore de snapshots: a cópia vive em
+  `snapshot_stage_root` (mesmo filesystem BTRFS) e é removida ao fim do run.
 - O cleanup remove apenas o sandbox resolvido e o domínio nomeado; caminhos
   fora do sandbox são rejeitados.
 

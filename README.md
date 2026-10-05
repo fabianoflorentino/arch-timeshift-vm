@@ -89,7 +89,7 @@ flowchart TB
         Gate -- "não, padrão seguro" --> Abort(["Aborta: nada é tocado"]):::danger
         Gate -- "sim" --> A["findmnt descobre o topo BTRFS<br/>(ou monta ro em /run)<br/>e timeshift-btrfs/snapshots<br/>(timeshift_root: auto)"]:::ro
         A --> B["resolve o snapshot<br/>@ + @home + info.json"]:::ro
-        B --> C["valida subvolumes e proteção ro de @"]:::ro
+        B --> C["valida subvolumes<br/>e tira cópia COW read-only @/@home"]:::rw
         C --> D{"vm_disk dentro de vm_images_dir<br/>e espaço livre suficiente?"}:::gate
         D -- "não" --> Abort
         D -- "sim" --> E["publica fatos:<br/>resolved_snapshot, snapshot_root,<br/>snapshot_home, vm_disk_real"]:::ro
@@ -311,7 +311,7 @@ group_vars/all.yml
 inventory/localhost.yml
 playbooks/{restore,preflight,cleanup,prepare-e2e}.yml
 roles/{snapshot,disk,restore,boot,libvirt}/
-roles/{snapshot_source,snapshot_stage,e2e_preflight,e2e_cleanup}/
+roles/{snapshot_source,e2e_preflight,e2e_cleanup}/
 molecule/{default,integration,e2e}/
 sudoers/arch-timeshift-vm
 scripts/{arch-timeshift-vm,check.sh,test-env.sh}

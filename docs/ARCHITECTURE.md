@@ -26,13 +26,12 @@ Tier 3 (`make e2e`) estende o pipeline com uma fonte preparada:
 ```mermaid
 flowchart LR
     SS["snapshot_source (opcional)<br/>valida a fonte real; criação é opt-in"]:::ro
-    SG["snapshot_stage<br/>cópia BTRFS read-only descartável"]:::rw
     PF["e2e_preflight<br/>valida KVM · OVMF · ferramentas · rede · espaço"]:::ro
-    PIPE["snapshot → disk → restore → boot → libvirt<br/>libvirt_uri = qemu:///system"]:::rw
+    PIPE["snapshot (cópia COW read-only)<br/>→ disk → restore → boot → libvirt<br/>libvirt_uri = qemu:///system"]:::rw
     VF["verify<br/>domstate · disco · guest agent · marcador persistente"]:::ro
     CL["e2e_cleanup (always)<br/>restaura o host: domínio · NVRAM · XML · mounts · NBD · staging"]:::danger
 
-    SS --> SG --> PF --> PIPE
+    SS --> PF --> PIPE
     PIPE --> VF --> EV(["VM iniciada e evidência validada"]):::done
     PIPE -. "sempre" .-> CL
     VF -. "sempre" .-> CL
@@ -47,14 +46,13 @@ flowchart LR
 
 | Role | Responsabilidade | Muta o host? |
 | --- | --- | --- |
-| `snapshot` | detectar/resolver e validar o snapshot; travas de segurança; validar `vm_disk`/espaço | não |
+| `snapshot` | detectar/resolver e validar o snapshot; tirar a cópia COW read-only enviada ao `restore`; travas de segurança; validar `vm_disk`/espaço | sim (cópia descartável em `snapshot_stage_root`) |
 | `disk` | criar qcow2, expor via NBD, particionar, formatar, montar | sim |
 | `restore` | `btrfs receive`, fstab da VM, identidade do clone | sim (no disco da VM) |
 | `boot` | semear kernel/initramfs, instalar GRUB UEFI | sim (no disco da VM) |
 | `libvirt` | garantir rede, gerar XML, definir e iniciar o domínio | sim (libvirt) |
 | `libvirt` (teardown) | destruir, undefine, remover NVRAM e XML | sim |
 | `snapshot_source` | localizar/criar (opt-in) e validar a fonte Timeshift para o E2E | não (criação é opt-in confirmado) |
-| `snapshot_stage` | cópia BTRFS read-only sendable da fonte | sim (staging em `/var/tmp`) |
 | `e2e_preflight` | validar KVM, OVMF, ferramentas, rede `qemu:///system`, espaço | não |
 | `e2e_cleanup` | remover domínio, NVRAM, XML, imagem, mounts, NBD e staging | sim (sandbox, nunca os snapshots reais) |
 
@@ -87,8 +85,8 @@ permanece inalterado.
   `snapshot_home`, `snapshot_dir` (produzidos pelo `snapshot`), `vm_disk_real`
   e `vm_images_dir_real` (caminhos canonicalizados e validados).
 - Fatos do E2E: `e2e_snapshot_dir`, `e2e_snapshot_name`,
-  `e2e_snapshot_capabilities` (`snapshot_source`), `e2e_snapshot_stage_dir`
-  (`snapshot_stage`), `e2e_host_capabilities` (`e2e_preflight`).
+  `e2e_snapshot_capabilities` (`snapshot_source`), `e2e_host_capabilities`
+  (`e2e_preflight`); o role `snapshot` publica `snapshot_stage_dir` (a cópia).
   `boot_guest_agent_available` (role `boot`) informa se o clone oferece o QEMU
   guest agent e é registrado em `e2e-vars.yml` para o `verify`.
 - `snapshot_top_mount` (topo BTRFS em uso) e `snapshot_top_mount_temporary`
@@ -122,8 +120,9 @@ permanece inalterado.
 - Troca atômica do qcow2 (novo arquivo pronto antes de remover o antigo).
 - Mounts efêmeros: o `/etc/fstab` do host nunca é alterado.
 - Todo caminho mutante passa por `block/rescue/always` + role `cleanup`.
-- No E2E, os snapshots reais nunca são mutados: o `snapshot_stage` cria cópias
-  read-only; criação de snapshot é opt-in com confirmação dupla
+- Os snapshots reais nunca são mutados, em nenhum fluxo (preflight, restore ou
+  E2E): o role `snapshot` tira uma cópia copy-on-write read-only e envia a cópia.
+  A criação de snapshot é opt-in com confirmação dupla
   (`snapshot_source_create` + `snapshot_source_create_confirm`).
 
 ## Isolamento de teste
@@ -133,6 +132,6 @@ permanece inalterado.
 - Tier 2: sandbox local com qcow2 temporário e snapshots sintéticos
   (loopback BTRFS). Nenhum teste toca `/data/libvirt/images` ou os snapshots
   reais.
-- Tier 3: VM descartável com KVM aninhado; o snapshot real é usado apenas
-  como fonte, via cópia de staging read-only em `/var/tmp`,
-  e removida no `e2e_cleanup`.
+- Tier 3: VM descartável com KVM aninhado; o snapshot real é usado apenas como
+  fonte da cópia copy-on-write read-only em `snapshot_stage_root`, removida no
+  `e2e_cleanup`.

@@ -88,7 +88,7 @@ Entre o preflight e o staging, a fonte pode mudar. Conferir a integridade da
 fonte selecionada:
 
 - sha256 do snapshot (ou dos arquivos-chave) gerado no `snapshot_source` e
-  verificado no `snapshot_stage`.
+  verificado ao final do staging do role `snapshot`.
 - Mismatch ⇒ aborte antes de tocar qualquer disco.
 
 ## Production-ready
