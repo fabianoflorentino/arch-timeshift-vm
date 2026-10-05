@@ -51,7 +51,7 @@ jobs:
       - name: Build the Tier 1 test image
         run: make test-image
       - name: Scan the Tier 1 test image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@v0.24.0
         with:
           image-ref: arch-timeshift-test:latest
           severity: CRITICAL,HIGH
