@@ -1,0 +1,18 @@
+---
+# Molecule runs this cleanup action on teardown, including after a converge that
+# aborted, so the sandbox and its loop/NBD devices never outlive the run.
+- name: Cleanup - Tier 2 sandbox and device residue
+  hosts: all
+  become: false
+  gather_facts: false
+
+  vars:
+    tier2_sandbox: /tmp/arch-timeshift-vm-tier2
+    tier2_mount: "{{ tier2_sandbox }}/top"
+    tier2b_mount: "{{ tier2_sandbox }}/subvol-root"
+    tier2b_top_mount_point: "{{ tier2_sandbox }}/auto-top"
+    work_dir: "{{ tier2_sandbox }}/work"
+
+  tasks:
+    - name: Purge the sandbox and its devices
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/purge.yml"

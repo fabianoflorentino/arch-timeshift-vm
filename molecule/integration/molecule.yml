@@ -26,10 +26,12 @@ verifier:
   name: ansible
 scenario:
   # The delegated, unmanaged driver creates no resources, so create/prepare/
-  # side_effect/cleanup/destroy have no playbooks to run. Run only what exists.
+  # side_effect have no playbooks. cleanup purges the sandbox and any loop/NBD
+  # residue from this run, including when converge aborts.
   test_sequence:
     - dependency
     - syntax
     - converge
     - idempotence
     - verify
+    - cleanup

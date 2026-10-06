@@ -1,0 +1,52 @@
+---
+# Idempotent purge of the Tier 2 sandbox and every device and mount it can leave
+# behind. Included at the start of converge (residue from a previous run) and by
+# cleanup.yml (residue from this run). Molecule runs the cleanup action on
+# teardown even when converge aborts, which is what the converge's own final
+# `always` cannot guarantee: a failure in an earlier block skips later blocks,
+# including the one that owns the final cleanup.
+
+- name: Purge the Tier 2 sandbox and its devices
+  ansible.builtin.shell: |
+    set -uo pipefail
+    # Unmount the sandbox mounts, nested ones first.
+    for mp in {{ work_dir }}/mnt-root {{ work_dir }}/mnt {{ tier2_mount }} \
+              {{ tier2b_mount }} {{ tier2b_top_mount_point }}; do
+      while findmnt --mountpoint "$mp" >/dev/null 2>&1; do
+        umount -R "$mp" 2>/dev/null || umount -lR "$mp" 2>/dev/null || break
+      done
+    done
+    # Disconnect the NBD device this run tracked, if any.
+    if [ -b "{{ nbd_device | default('/dev/null') }}" ]; then
+      qemu-nbd --disconnect "{{ nbd_device | default('') }}" >/dev/null 2>&1 || true
+    fi
+    # Disconnect any other NBD device whose qemu-nbd serves the sandbox.
+    for nbd in /dev/nbd*; do
+      [ -b "$nbd" ] || continue
+      pid_file="/sys/block/$(basename "$nbd")/pid"
+      [ -r "$pid_file" ] || continue
+      pid="$(cat "$pid_file" 2>/dev/null || true)"
+      [ -n "$pid" ] || continue
+      if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "{{ tier2_sandbox }}"; then
+        qemu-nbd --disconnect "$nbd" >/dev/null 2>&1 || true
+      fi
+    done
+    # Detach loop devices backed by a file in the sandbox, including ones whose
+    # file was already unlinked (backing_file shows " (deleted)"). `losetup -j
+    # <dir>` only matches an exact backing file, never a directory, so it missed
+    # these and rm -rf left loops attached to deleted files, which udisks/GNOME
+    # then offered to mount.
+    for bf in /sys/block/loop*/loop/backing_file; do
+      [ -r "$bf" ] || continue
+      file="$(cat "$bf" 2>/dev/null || true)"
+      case "$file" in
+        *"{{ tier2_sandbox }}"*)
+          losetup --detach "/dev/$(basename "$(dirname "$(dirname "$bf")")")" 2>/dev/null || true
+          ;;
+      esac
+    done
+    rm -rf {{ tier2_sandbox }}
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
