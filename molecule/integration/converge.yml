@@ -96,10 +96,18 @@
             qemu-nbd --disconnect "$nbd" >/dev/null 2>&1 || true
           fi
         done
-        # Detach loop devices a previous run left attached, before the
-        # images they point at are removed
-        losetup -j "{{ tier2_sandbox }}" | cut -d: -f1 | while read -r loop; do
-          losetup --detach "$loop" 2>/dev/null || true
+        # Detach loop devices whose backing file was in the sandbox, including
+        # ones already unlinked (backing_file shows " (deleted)"). `losetup -j
+        # <dir>` only matches an exact backing file, never a directory, so it
+        # missed these and the rm -rf below left loops on deleted files.
+        for bf in /sys/block/loop*/loop/backing_file; do
+          [ -r "$bf" ] || continue
+          file="$(cat "$bf" 2>/dev/null || true)"
+          case "$file" in
+            *"{{ tier2_sandbox }}"*)
+              losetup --detach "/dev/$(basename "$(dirname "$(dirname "$bf")")")" 2>/dev/null || true
+              ;;
+          esac
         done
         rm -rf {{ tier2_sandbox }}
       args:
@@ -1067,9 +1075,18 @@
                 qemu-nbd --disconnect "$nbd" >/dev/null 2>&1 || true
               fi
             done
-            # Detach loop devices left behind by an aborted block
-            losetup -j "{{ tier2_sandbox }}" | cut -d: -f1 | while read -r loop; do
-              losetup --detach "$loop" 2>/dev/null || true
+            # Detach loop devices whose backing file was in the sandbox,
+            # including ones already unlinked (backing_file shows " (deleted)"):
+            # `losetup -j <dir>` only matches an exact backing file, not a
+            # directory, so the rm -rf below used to leave loops on deleted files.
+            for bf in /sys/block/loop*/loop/backing_file; do
+              [ -r "$bf" ] || continue
+              file="$(cat "$bf" 2>/dev/null || true)"
+              case "$file" in
+                *"{{ tier2_sandbox }}"*)
+                  losetup --detach "/dev/$(basename "$(dirname "$(dirname "$bf")")")" 2>/dev/null || true
+                  ;;
+              esac
             done
             rm -rf {{ tier2_sandbox }}
           args:
